@@ -259,6 +259,10 @@ const App = {
         }
         stockContainer.innerHTML = stockHtml || '<div style="grid-column:1/-1;text-align:center;padding:12px;color:var(--text-muted)">Warehouse is currently empty.</div>';
 
+        // Crop Analysis Dashboard
+        await CropAnalysis.init();
+        await CropAnalysis.render();
+
         // Profit Chart
         this.renderProfitChart(purchases, sales, expenses);
 
