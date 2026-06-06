@@ -31,6 +31,33 @@ const CropAnalysis = {
         if (currentVal) sel.value = currentVal;
     },
 
+    getDateRange() {
+        const from = document.getElementById('crop-analysis-from');
+        const to = document.getElementById('crop-analysis-to');
+        return {
+            fromDate: from ? from.value : '',
+            toDate: to ? to.value : ''
+        };
+    },
+
+    resetDates() {
+        const from = document.getElementById('crop-analysis-from');
+        const to = document.getElementById('crop-analysis-to');
+        if (from) from.value = '';
+        if (to) to.value = '';
+        this.render();
+    },
+
+    filterByDateRange(records, fromDate, toDate) {
+        if (!fromDate && !toDate) return records;
+        return records.filter(r => {
+            if (!r.date) return false;
+            if (fromDate && r.date < fromDate) return false;
+            if (toDate && r.date > toDate) return false;
+            return true;
+        });
+    },
+
     computeMetrics(crop, purchases, sales, expenses) {
         // Filter by crop (empty = all)
         const fp = crop ? purchases.filter(p => p.crop === crop) : purchases;
@@ -41,10 +68,11 @@ const CropAnalysis = {
         const purchaseCount = fp.length;
         const purchaseWeight = fp.reduce((s, p) => s + (p.netWeight || 0), 0);
         const purchaseMaund = purchaseWeight / 40;
-        const purchaseAmount = fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+        const purchaseAmount = fp.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
         const purchaseAvgRate = purchaseMaund > 0 ? purchaseAmount / purchaseMaund : 0;
+        const purchasePayable = fp.reduce((s, p) => s + Utils.purchasePayableAmount(p), 0);
         const purchasePaid = fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
-        const purchaseBalance = purchaseAmount - purchasePaid;
+        const purchaseBalance = purchasePayable - purchasePaid;
 
         // Sale metrics
         const saleCount = fs.length;
@@ -74,8 +102,20 @@ const CropAnalysis = {
         // Effective cost per maund (purchase + expenses)
         const effectiveCostPerMn = purchaseMaund > 0 ? (purchaseAmount + totalExpenses) / purchaseMaund : 0;
 
+        // Use lots logic to determine COGS
+        const lotsInfo = Utils.calculateInventoryLots(fp, fs, fe);
+        let totalCogs = 0;
+        let inventoryValue = 0;
+        Object.values(lotsInfo).forEach(lot => {
+            totalCogs += lot.cogs || 0;
+            inventoryValue += lot.inventoryValue || 0;
+        });
+
+        // Expenses linked to purchases are already in COGS. We only subtract unlinked expenses.
+        const unlinkedExpenses = fe.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
+
         // Net P&L
-        const netPL = saleAmount - purchaseAmount - totalExpenses;
+        const netPL = saleAmount - totalCogs - unlinkedExpenses;
 
         // Remaining amount (purchase balance - sale balance)
         const remainingAmount = purchaseBalance - saleBalance;
@@ -188,7 +228,7 @@ const CropAnalysis = {
         const rows = types.map(([type, data]) => {
             const pct = totalExpenses > 0 ? ((data.amount / totalExpenses) * 100).toFixed(1) : 0;
             return `<tr>
-                <td><span class="badge badge-info">${type}</span></td>
+                <td><span class="badge badge-info">${Utils.escapeHTML(type)}</span></td>
                 <td class="text-center">${data.count}</td>
                 <td class="text-right font-bold">PKR ${Utils.formatPKR(data.amount)}</td>
                 <td>
@@ -222,17 +262,241 @@ const CropAnalysis = {
         </div>`;
     },
 
+    renderRateChartHTML() {
+        return `
+        <div class="crop-chart-section">
+            <h4 class="crop-section-title"><i data-lucide="trending-up"></i> Rate Trend per Maund</h4>
+            <div class="crop-chart-container">
+                <canvas id="crop-rate-chart"></canvas>
+            </div>
+        </div>`;
+    },
+
+    renderRateTrendChart(purchases, sales, fromDate, toDate) {
+        const canvas = document.getElementById('crop-rate-chart');
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.parentElement.getBoundingClientRect();
+        const w = rect.width || 600;
+        const h = 220;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, w, h);
+
+        // Determine months to display
+        const months = [];
+        if (fromDate && toDate) {
+            // Use the date range
+            const start = new Date(fromDate + 'T00:00:00');
+            const end = new Date(toDate + 'T00:00:00');
+            const d = new Date(start.getFullYear(), start.getMonth(), 1);
+            while (d <= end) {
+                months.push({
+                    key: d.toISOString().slice(0, 7),
+                    label: d.toLocaleString('en', { month: 'short', year: '2-digit' })
+                });
+                d.setMonth(d.getMonth() + 1);
+            }
+            // Cap at 12 months
+            if (months.length > 12) months.splice(0, months.length - 12);
+        } else {
+            // Default: last 6 months
+            const now = new Date();
+            for (let i = 5; i >= 0; i--) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                months.push({
+                    key: d.toISOString().slice(0, 7),
+                    label: d.toLocaleString('en', { month: 'short', year: '2-digit' })
+                });
+            }
+        }
+
+        if (months.length === 0) return;
+
+        // Compute rates per month
+        const data = months.map(m => {
+            const mp = purchases.filter(p => p.date && p.date.startsWith(m.key));
+            const ms = sales.filter(s => s.date && s.date.startsWith(m.key));
+
+            const pWeight = mp.reduce((s, p) => s + (p.netWeight || 0), 0);
+            const pAmount = mp.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
+            const pMaund = pWeight / 40;
+            const pRate = pMaund > 0 ? pAmount / pMaund : 0;
+
+            const sWeight = ms.reduce((s, p) => s + (p.netWeight || 0), 0);
+            const sAmount = ms.reduce((s, p) => s + (p.amount || 0), 0);
+            const sMaund = sWeight / 40;
+            const sRate = sMaund > 0 ? sAmount / sMaund : 0;
+
+            return { label: m.label, pRate, sRate };
+        });
+
+        // Check if there's any data to plot
+        const hasData = data.some(d => d.pRate > 0 || d.sRate > 0);
+        if (!hasData) {
+            ctx.fillStyle = '#64748b';
+            ctx.font = '13px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('No rate data available for this period', w / 2, h / 2);
+            return;
+        }
+
+        const maxRate = Math.max(1, ...data.map(d => Math.max(d.pRate, d.sRate))) * 1.15;
+        const chartLeft = 65;
+        const chartRight = w - 25;
+        const chartTop = 25;
+        const chartBottom = h - 40;
+        const chartW = chartRight - chartLeft;
+        const chartH = chartBottom - chartTop;
+
+        // Grid lines
+        ctx.strokeStyle = 'rgba(203,213,225,0.6)';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i <= 4; i++) {
+            const y = chartTop + (chartH / 4) * i;
+            ctx.beginPath();
+            ctx.moveTo(chartLeft, y);
+            ctx.lineTo(chartRight, y);
+            ctx.stroke();
+            // Y-axis labels
+            ctx.fillStyle = '#475569';
+            ctx.font = '10px Inter, sans-serif';
+            ctx.textAlign = 'right';
+            const val = maxRate - (maxRate / 4) * i;
+            ctx.fillText(val >= 1000 ? (val / 1000).toFixed(1) + 'K' : val.toFixed(0), chartLeft - 8, y + 4);
+        }
+
+        const stepX = data.length > 1 ? chartW / (data.length - 1) : chartW;
+        const getX = (i) => data.length > 1 ? chartLeft + stepX * i : chartLeft + chartW / 2;
+        const getY = (val) => chartBottom - (val / maxRate) * chartH;
+
+        // Helper to draw a filled line
+        const drawLine = (key, color1, color2) => {
+            const points = data.map((d, i) => ({ x: getX(i), y: getY(d[key]) }));
+            const validPoints = points.filter((_, i) => data[i][key] > 0);
+
+            if (validPoints.length === 0) return;
+
+            // Fill area
+            ctx.beginPath();
+            let started = false;
+            let firstX = 0, lastX = 0;
+            points.forEach((p, i) => {
+                if (data[i][key] > 0) {
+                    if (!started) { ctx.moveTo(p.x, p.y); firstX = p.x; started = true; }
+                    else ctx.lineTo(p.x, p.y);
+                    lastX = p.x;
+                }
+            });
+            ctx.lineTo(lastX, chartBottom);
+            ctx.lineTo(firstX, chartBottom);
+            ctx.closePath();
+            const grad = ctx.createLinearGradient(0, chartTop, 0, chartBottom);
+            grad.addColorStop(0, color1 + '25');
+            grad.addColorStop(1, color1 + '05');
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            // Line
+            ctx.beginPath();
+            started = false;
+            points.forEach((p, i) => {
+                if (data[i][key] > 0) {
+                    if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+                    else ctx.lineTo(p.x, p.y);
+                }
+            });
+            ctx.strokeStyle = color1;
+            ctx.lineWidth = 2.5;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Dots and labels
+            points.forEach((p, i) => {
+                if (data[i][key] > 0) {
+                    // Dot
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                    ctx.fillStyle = color1;
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fill();
+
+                    // Value label
+                    const val = data[i][key];
+                    ctx.fillStyle = color2;
+                    ctx.font = 'bold 9px Inter, sans-serif';
+                    ctx.textAlign = 'center';
+                    const label = val >= 1000 ? (val / 1000).toFixed(1) + 'K' : val.toFixed(0);
+                    ctx.fillText(label, p.x, p.y - 10);
+                }
+            });
+        };
+
+        // Draw purchase rate line (blue)
+        drawLine('pRate', '#3b82f6', '#60a5fa');
+        // Draw sale rate line (green)
+        drawLine('sRate', '#10b981', '#34d399');
+
+        // X-axis labels
+        data.forEach((d, i) => {
+            ctx.fillStyle = '#64748b';
+            ctx.font = '10px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(d.label, getX(i), chartBottom + 16);
+        });
+
+        // Legend
+        const legendY = h - 8;
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(chartLeft, legendY - 8, 10, 8);
+        ctx.fillStyle = '#475569';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Purchase Rate/Mn', chartLeft + 14, legendY);
+
+        ctx.fillStyle = '#10b981';
+        ctx.fillRect(chartLeft + 130, legendY - 8, 10, 8);
+        ctx.fillStyle = '#475569';
+        ctx.fillText('Sale Rate/Mn', chartLeft + 144, legendY);
+    },
+
     async render() {
         const sel = document.getElementById('crop-analysis-select');
         const container = document.getElementById('crop-analysis-content');
         if (!sel || !container) return;
 
         this.selectedCrop = sel.value;
+        const { fromDate, toDate } = this.getDateRange();
 
-        const purchases = await DB.getAll('purchases');
-        const sales = await DB.getAll('sales');
-        const expenses = await DB.getAll('expenses');
+        let purchases = await DB.getAll('purchases');
+        let sales = await DB.getAll('sales');
+        let expenses = await DB.getAll('expenses');
 
+        // Apply season filter if active
+        const activeSeason = typeof SeasonManager !== 'undefined' ? await SeasonManager.getActiveSeason() : null;
+        if (activeSeason) {
+            purchases = SeasonManager.filterByActiveSeason(purchases, activeSeason);
+            sales = SeasonManager.filterByActiveSeason(sales, activeSeason);
+            expenses = SeasonManager.filterByActiveSeason(expenses, activeSeason);
+        } else {
+            purchases = purchases.filter(p => p.type !== 'opening_balance');
+        }
+
+        // Apply date range filter
+        purchases = this.filterByDateRange(purchases, fromDate, toDate);
+        sales = this.filterByDateRange(sales, fromDate, toDate);
+        expenses = this.filterByDateRange(expenses, fromDate, toDate);
+
+        // Filter by crop for metrics
         const m = this.computeMetrics(this.selectedCrop, purchases, sales, expenses);
 
         // Check if there's any data at all
@@ -241,13 +505,23 @@ const CropAnalysis = {
                 <div class="crop-empty-state">
                     <i data-lucide="bar-chart-2" style="width:48px;height:48px;color:var(--text-muted);margin-bottom:12px"></i>
                     <h3>No Data Available</h3>
-                    <p>${this.selectedCrop ? `No transactions found for "${this.selectedCrop}".` : 'Start adding purchases and sales to see crop analysis here.'}</p>
+                    <p>${this.selectedCrop ? `No transactions found for "${Utils.escapeHTML(this.selectedCrop)}".` : 'Start adding purchases and sales to see crop analysis here.'}</p>
                 </div>`;
-            lucide.createIcons();
+            Utils.safeCreateIcons();
             return;
         }
 
-        container.innerHTML = this.renderKPICards(m) + this.renderExpensesTable(m.expensesByType, m.totalExpenses);
-        lucide.createIcons();
+        // Build content: KPI cards + expenses + rate trend chart
+        container.innerHTML =
+            this.renderKPICards(m) +
+            this.renderExpensesTable(m.expensesByType, m.totalExpenses) +
+            this.renderRateChartHTML();
+
+        Utils.safeCreateIcons();
+
+        // Render the rate trend chart on canvas (after DOM update)
+        const cropPurchases = this.selectedCrop ? purchases.filter(p => p.crop === this.selectedCrop) : purchases;
+        const cropSales = this.selectedCrop ? sales.filter(s => s.crop === this.selectedCrop) : sales;
+        setTimeout(() => this.renderRateTrendChart(cropPurchases, cropSales, fromDate, toDate), 50);
     }
 };

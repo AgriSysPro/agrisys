@@ -6,11 +6,11 @@
     <title>AgriSys - Agricultural Business System</title>
     <meta name="description" content="Agricultural buying and selling business management system">
     <link rel="stylesheet" href="css/main.css">
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script src="js/vendor/lucide.js"></script>
+    <script src="js/vendor/jspdf.umd.min.js"></script>
+    <script src="js/vendor/jspdf.plugin.autotable.min.js"></script>
+    <script src="js/vendor/xlsx.full.min.js"></script>
+    <script src="js/vendor/qrcode.min.js"></script>
 </head>
 <body>
 
@@ -24,6 +24,7 @@
             <div>
                 <div class="sidebar-title" id="sidebar-biz-name">AgriSys</div>
                 <div class="sidebar-subtitle">Business Management</div>
+                <div class="season-badge" id="sidebar-season-badge" style="display:none"></div>
             </div>
         </div>
         <nav class="sidebar-nav">
@@ -64,14 +65,35 @@
             <div class="nav-item" data-section="expenses" onclick="App.navigate('expenses')">
                 <i data-lucide="receipt"></i> Expenses
             </div>
+            <div class="nav-item" data-section="opening-balances" onclick="App.navigate('opening-balances')">
+                <i data-lucide="book-plus"></i> Opening Balances
+            </div>
+            <div class="nav-item" data-section="stock-adjustments" onclick="App.navigate('stock-adjustments')">
+                <i data-lucide="package-plus"></i> Stock Adjustments
+            </div>
+            <div class="nav-item" data-section="inventory-lots" onclick="App.navigate('inventory-lots')">
+                <i data-lucide="boxes"></i> Inventory Lots
+            </div>
             <div class="nav-item" data-section="capital" onclick="App.navigate('capital')">
                 <i data-lucide="landmark"></i> Capital
             </div>
             <div class="nav-item" data-section="bookkeeping" onclick="App.navigate('bookkeeping')">
                 <i data-lucide="book-open"></i> Bookkeeping
             </div>
+            <div class="nav-item" data-section="cash-book" onclick="App.navigate('cash-book')">
+                <i data-lucide="notebook-tabs"></i> Cash Book
+            </div>
+            <div class="nav-item" data-section="trial-balance" onclick="App.navigate('trial-balance')">
+                <i data-lucide="scale"></i> Trial Balance
+            </div>
+            <div class="nav-item" data-section="general-ledger" onclick="App.navigate('general-ledger')">
+                <i data-lucide="library-big"></i> General Ledger
+            </div>
             <div class="nav-item" data-section="reports" onclick="App.navigate('reports')">
                 <i data-lucide="bar-chart-3"></i> Reports
+            </div>
+            <div class="nav-item" data-section="aging-reports" onclick="App.navigate('aging-reports')">
+                <i data-lucide="calendar-clock"></i> Aging Reports
             </div>
 
             <div class="nav-section-label">System</div>
@@ -108,7 +130,13 @@
             <div class="card crop-analysis-card" style="margin-bottom:20px">
                 <div class="card-header">
                     <h3 class="card-title"><i data-lucide="bar-chart-2"></i> Crop Analysis Dashboard</h3>
-                    <div style="display:flex;gap:10px;align-items:center;">
+                    <div class="crop-filter-controls">
+                        <div class="crop-date-filter">
+                            <input class="form-input" type="date" id="crop-analysis-from" onchange="CropAnalysis.render()" title="From date">
+                            <span style="color:var(--text-muted);font-size:0.8rem">to</span>
+                            <input class="form-input" type="date" id="crop-analysis-to" onchange="CropAnalysis.render()" title="To date">
+                            <button class="btn btn-sm btn-ghost" onclick="CropAnalysis.resetDates()" title="Clear dates"><i data-lucide="x"></i></button>
+                        </div>
                         <select class="form-select" id="crop-analysis-select" onchange="CropAnalysis.render()" style="min-width:180px;">
                             <option value="">All Crops</option>
                         </select>
@@ -219,6 +247,8 @@
                 <div class="form-grid">
                     <div class="form-group"><label class="form-label">Payment Status</label><select class="form-select" id="p-payment-status" onchange="Purchasing.calculate()"><option value="pending">Pending</option><option value="partial">Partially Paid</option><option value="paid">Fully Paid</option></select></div>
                     <div class="form-group"><label class="form-label">Amount Paid (PKR)</label><input class="form-input" type="number" id="p-amount-paid" step="0.01" value="0" oninput="Purchasing.calculate()"></div>
+                    <div class="form-group"><label class="form-label">Cash/Bank Account</label><select class="form-select" id="p-initial-account"><option value="">Select cash/bank account</option></select></div>
+                    <div class="form-group"><label class="form-label">Due Date</label><input class="form-input" type="date" id="p-due-date"></div>
                     <div class="form-group"><label class="form-label">Balance Remaining</label><div class="computed-value" id="calc-balance" style="background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.2);color:var(--accent-danger)">PKR 0.00</div></div>
                 </div>
                 <div class="form-group full-width" style="margin-top:16px"><label class="form-label">Notes</label><textarea class="form-textarea" id="p-notes" placeholder="Additional notes..."></textarea></div>
@@ -291,6 +321,13 @@
                     <tbody id="pp-tbody"></tbody>
                 </table></div>
             </div>
+            <div class="card" style="margin-top:20px">
+                <div class="card-header"><h3 class="card-title">Payment History</h3></div>
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Voucher</th><th>Date</th><th>Farmer</th><th>Purchase</th><th>Mode</th><th class="text-right">Amount</th><th>Account</th><th>Actions</th></tr></thead>
+                    <tbody id="pp-history-tbody"></tbody>
+                </table></div>
+            </div>
         </div>
 
         <!-- ===== SELLING FORM ===== -->
@@ -327,6 +364,8 @@
                 <div class="form-grid">
                     <div class="form-group"><label class="form-label">Payment Status</label><select class="form-select" id="s-payment-status"><option value="pending">Pending</option><option value="partial">Partial</option><option value="paid">Paid</option></select></div>
                     <div class="form-group"><label class="form-label">Amount Received (PKR)</label><input class="form-input" type="number" id="s-amount-received" step="0.01" value="0"></div>
+                    <div class="form-group"><label class="form-label">Cash/Bank Account</label><select class="form-select" id="s-initial-account"><option value="">Select cash/bank account</option></select></div>
+                    <div class="form-group"><label class="form-label">Due Date</label><input class="form-input" type="date" id="s-due-date"></div>
                 </div>
                 <div class="form-group full-width" style="margin-top:16px">
                     <label class="form-label">Buyer Receipt Attachment</label>
@@ -398,6 +437,13 @@
                 <thead><tr><th>Receipt ID</th><th>Date</th><th>Buyer</th><th>Crop</th><th class="text-right">Amount</th><th class="text-right">Received</th><th class="text-right">Balance</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody id="sp-tbody"></tbody>
             </table></div></div>
+            <div class="card" style="margin-top:20px">
+                <div class="card-header"><h3 class="card-title">Receipt History</h3></div>
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Voucher</th><th>Date</th><th>Buyer</th><th>Sale</th><th>Mode</th><th class="text-right">Amount</th><th>Account</th><th>Actions</th></tr></thead>
+                    <tbody id="sp-history-tbody"></tbody>
+                </table></div>
+            </div>
         </div>
 
         <!-- ===== EXPENSES ===== -->
@@ -421,6 +467,72 @@
                     <tbody id="expenses-tbody"></tbody>
                 </table></div>
                 <div id="crop-analysis" style="display:none"></div>
+            </div>
+        </div>
+
+        <!-- ===== OPENING BALANCES ===== -->
+        <div class="section" id="sec-opening-balances">
+            <div class="page-header">
+                <div><h1 class="page-title">Opening Balances</h1><p class="page-title-sub">Starting balances for parties, capital, and stock</p></div>
+                <div class="page-actions"><button class="btn btn-primary" onclick="OpeningBalances.showModal()"><i data-lucide="plus"></i> Add Opening Balance</button></div>
+            </div>
+            <div class="card">
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Date</th><th>Type</th><th>Party / Crop</th><th>Account</th><th class="text-right">Weight</th><th class="text-right">Amount</th><th class="text-right">Settled</th><th class="text-right">Balance</th><th>Status</th><th>Notes</th><th>Actions</th></tr></thead>
+                    <tbody id="ob-tbody"></tbody>
+                </table></div>
+            </div>
+        </div>
+
+        <!-- ===== STOCK ADJUSTMENTS ===== -->
+        <div class="section" id="sec-stock-adjustments">
+            <div class="page-header">
+                <div><h1 class="page-title">Stock Adjustments</h1><p class="page-title-sub">Correct stock for shortage, damage, moisture loss, or opening stock</p></div>
+                <div class="page-actions"><button class="btn btn-primary" onclick="StockAdjustments.showModal()"><i data-lucide="plus"></i> Add Adjustment</button></div>
+            </div>
+            <div class="card">
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Date</th><th>Crop</th><th>Direction</th><th>Reason</th><th class="text-right">Weight</th><th class="text-right">Value</th><th>Actions</th></tr></thead>
+                    <tbody id="stock-adj-tbody"></tbody>
+                </table></div>
+            </div>
+        </div>
+
+        <!-- ===== INVENTORY LOTS ===== -->
+        <div class="section" id="sec-inventory-lots">
+            <div class="page-header">
+                <div><h1 class="page-title">Inventory Lots</h1><p class="page-title-sub">FIFO stock lots, remaining quantities, and cost values</p></div>
+                <div class="page-actions"><button class="btn btn-ghost" onclick="InventoryLots.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+            </div>
+            <div class="stats-grid" id="inventory-lot-stats"></div>
+            <div class="card">
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Lot ID</th><th>Date</th><th>Crop</th><th>Source</th><th class="text-right">Original KG</th><th class="text-right">Sold KG</th><th class="text-right">Remaining KG</th><th class="text-right">Cost/Mn</th><th class="text-right">Remaining Value</th></tr></thead>
+                    <tbody id="inventory-lots-tbody"></tbody>
+                </table></div>
+            </div>
+        </div>
+
+        <!-- ===== AGING REPORTS ===== -->
+        <div class="section" id="sec-aging-reports">
+            <div class="page-header">
+                <div><h1 class="page-title">Aging Reports</h1><p class="page-title-sub">Outstanding farmer payables and buyer receivables by age</p></div>
+                <div class="page-actions"><button class="btn btn-ghost" onclick="AgingReports.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+            </div>
+            <div class="stats-grid" id="aging-stats"></div>
+            <div class="card" style="margin-bottom:20px">
+                <div class="card-header"><h3 class="card-title">Buyer Receivables Aging</h3></div>
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Buyer</th><th>Source</th><th>Date</th><th class="text-right">Balance</th><th class="text-right">Days</th><th>Bucket</th></tr></thead>
+                    <tbody id="buyer-aging-tbody"></tbody>
+                </table></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h3 class="card-title">Farmer Payables Aging</h3></div>
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Farmer</th><th>Source</th><th>Date</th><th class="text-right">Balance</th><th class="text-right">Days</th><th>Bucket</th></tr></thead>
+                    <tbody id="farmer-aging-tbody"></tbody>
+                </table></div>
             </div>
         </div>
 
@@ -459,6 +571,8 @@
                     <button class="btn btn-ghost" onclick="Bookkeeping.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
                     <button class="btn btn-ghost" onclick="Bookkeeping.exportPDF()"><i data-lucide="file-text"></i> PDF</button>
                     <button class="btn btn-primary" onclick="Bookkeeping.regenerate()"><i data-lucide="refresh-cw"></i> Regenerate</button>
+                    <div style="width: 1px; height: 24px; background: var(--border-color); margin: 0 8px;"></div>
+                    <button class="btn btn-warning" onclick="Journal.showModal()"><i data-lucide="plus"></i> Manual Entry</button>
                 </div>
             </div>
             <div class="date-range" style="margin-bottom:12px">
@@ -476,6 +590,59 @@
             <div class="card"><div class="table-container"><table class="data-table">
                 <thead><tr><th>Date</th><th>Description</th><th>Account</th><th class="text-right">Debit</th><th class="text-right">Credit</th></tr></thead>
                 <tbody id="bk-tbody"></tbody>
+            </table></div></div>
+        </div>
+
+        <!-- ===== CASH BOOK ===== -->
+        <div class="section" id="sec-cash-book">
+            <div class="page-header">
+                <div><h1 class="page-title">Cash Book</h1><p class="page-title-sub">Account-wise deposits, withdrawals, and running balance</p></div>
+                <div class="page-actions"><button class="btn btn-ghost" onclick="FinanceReports.exportCashBook()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+            </div>
+            <div class="filter-bar">
+                <select class="filter-select" id="cb-account" onchange="FinanceReports.renderCashBook()"></select>
+                <input class="filter-select" type="date" id="cb-from" onchange="FinanceReports.renderCashBook()">
+                <input class="filter-select" type="date" id="cb-to" onchange="FinanceReports.renderCashBook()">
+            </div>
+            <div class="stats-grid" id="cash-book-stats"></div>
+            <div class="card"><div class="table-container"><table class="data-table">
+                <thead><tr><th>Date</th><th>Account</th><th>Description</th><th class="text-right">Deposit</th><th class="text-right">Withdrawal</th><th class="text-right">Balance</th><th>Recon</th></tr></thead>
+                <tbody id="cash-book-tbody"></tbody>
+            </table></div></div>
+        </div>
+
+        <!-- ===== TRIAL BALANCE ===== -->
+        <div class="section" id="sec-trial-balance">
+            <div class="page-header">
+                <div><h1 class="page-title">Trial Balance</h1><p class="page-title-sub">Debit and credit totals by account</p></div>
+                <div class="page-actions"><button class="btn btn-ghost" onclick="FinanceReports.exportTrialBalance()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+            </div>
+            <div class="filter-bar">
+                <input class="filter-select" type="date" id="tb-from" onchange="FinanceReports.renderTrialBalance()">
+                <input class="filter-select" type="date" id="tb-to" onchange="FinanceReports.renderTrialBalance()">
+            </div>
+            <div class="stats-grid" id="trial-balance-stats"></div>
+            <div class="card"><div class="table-container"><table class="data-table">
+                <thead><tr><th>Account</th><th class="text-right">Debit Total</th><th class="text-right">Credit Total</th><th class="text-right">Net Debit</th><th class="text-right">Net Credit</th></tr></thead>
+                <tbody id="trial-balance-tbody"></tbody>
+            </table></div></div>
+        </div>
+
+        <!-- ===== GENERAL LEDGER ===== -->
+        <div class="section" id="sec-general-ledger">
+            <div class="page-header">
+                <div><h1 class="page-title">General Ledger</h1><p class="page-title-sub">Debit and credit movement by account</p></div>
+                <div class="page-actions"><button class="btn btn-ghost" onclick="FinanceReports.exportGeneralLedger()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+            </div>
+            <div class="filter-bar">
+                <select class="filter-select" id="gl-account" onchange="FinanceReports.renderGeneralLedger()"></select>
+                <input class="filter-select" type="date" id="gl-from" onchange="FinanceReports.renderGeneralLedger()">
+                <input class="filter-select" type="date" id="gl-to" onchange="FinanceReports.renderGeneralLedger()">
+            </div>
+            <div class="stats-grid" id="general-ledger-stats"></div>
+            <div class="card"><div class="table-container"><table class="data-table">
+                <thead><tr><th>Date</th><th>Description</th><th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Running Balance</th></tr></thead>
+                <tbody id="general-ledger-tbody"></tbody>
             </table></div></div>
         </div>
 
@@ -513,6 +680,48 @@
             <div id="report-content"></div>
         </div>
 
+        <!-- Ledger Date Filter Modal -->
+        <div class="modal-overlay" id="ledger-filter-modal">
+            <div class="modal">
+                <div class="modal-header"><h3 class="modal-title" id="ledger-filter-title">Ledger Options</h3><button class="modal-close" onclick="Utils.hideModal('ledger-filter-modal')">×</button></div>
+                <div class="modal-body">
+                    <div class="form-grid">
+                        <div class="form-group"><label class="form-label">From Date</label><input class="form-input" type="date" id="ledger-from"></div>
+                        <div class="form-group"><label class="form-label">To Date</label><input class="form-input" type="date" id="ledger-to"></div>
+                        <div class="form-group full-width" style="display:flex;align-items:center;gap:10px">
+                            <input type="checkbox" id="ledger-include-opening" checked style="width:18px;height:18px;accent-color:var(--accent-primary)">
+                            <label class="form-label" for="ledger-include-opening" style="margin:0">Include opening balances</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-ghost" onclick="Utils.hideModal('ledger-filter-modal')">Cancel</button>
+                    <button class="btn btn-primary" id="ledger-filter-excel">Export Excel</button>
+                    <button class="btn btn-success" id="ledger-filter-pdf">Print PDF</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual Journal Entry Modal -->
+        <div class="modal-overlay" id="journal-modal">
+            <div class="modal">
+                <div class="modal-header"><h3 class="modal-title">New Journal Entry</h3><button class="modal-close" onclick="Utils.hideModal('journal-modal')">×</button></div>
+                <div class="modal-body">
+                    <div class="form-grid">
+                        <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="jv-date"></div>
+                        <div class="form-group"><label class="form-label">Description</label><input class="form-input" id="jv-desc" placeholder="Entry details"></div>
+                        <div class="form-group"><label class="form-label">Debit Account</label><select class="form-select" id="jv-dr"></select></div>
+                        <div class="form-group"><label class="form-label">Credit Account</label><select class="form-select" id="jv-cr"></select></div>
+                        <div class="form-group full-width"><label class="form-label">Amount (PKR)</label><input class="form-input" type="number" id="jv-amt" step="0.01" value="0"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-ghost" onclick="Utils.hideModal('journal-modal')">Cancel</button>
+                    <button class="btn btn-primary" onclick="Journal.save()">Save Entry</button>
+                </div>
+            </div>
+        </div>
+
         <!-- ===== SETTINGS ===== -->
         <div class="section" id="sec-settings">
             <div class="page-header"><div><h1 class="page-title">Settings</h1><p class="page-title-sub">Business configuration</p></div></div>
@@ -544,11 +753,65 @@
                 <button class="btn btn-primary" style="margin-top:16px" onclick="Settings.saveDefaults()"><i data-lucide="save"></i> Save Defaults</button>
             </div>
             <div class="card" style="margin-bottom:20px">
+                <div class="card-header"><h3 class="card-title">Receipt Template Settings</h3></div>
+                <div class="form-grid">
+                    <div class="form-group"><label class="form-label">Footer Text</label><input class="form-input" id="set-receipt-footer" placeholder="Thank you for your business"></div>
+                    <div class="form-group"><label class="form-label">Copy Layout</label><select class="form-select" id="set-receipt-layout"><option value="two-copy">Customer/Shop copy</option><option value="single-copy">Single copy</option></select></div>
+                    <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px"><input type="checkbox" id="set-receipt-qr" style="width:18px;height:18px;accent-color:var(--accent-primary)"><label for="set-receipt-qr" class="form-label" style="margin:0;cursor:pointer">Show QR code</label></div>
+                    <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px"><input type="checkbox" id="set-receipt-signatures" style="width:18px;height:18px;accent-color:var(--accent-primary)"><label for="set-receipt-signatures" class="form-label" style="margin:0;cursor:pointer">Show signatures</label></div>
+                    <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px"><input type="checkbox" id="set-receipt-owner" style="width:18px;height:18px;accent-color:var(--accent-primary)"><label for="set-receipt-owner" class="form-label" style="margin:0;cursor:pointer">Show owner name</label></div>
+                </div>
+                <button class="btn btn-primary" style="margin-top:16px" onclick="Settings.saveReceiptTemplate()"><i data-lucide="save"></i> Save Template</button>
+            </div>
+
+            <!-- Season / Fiscal Year Management -->
+            <div class="card season-card" style="margin-bottom:20px">
+                <div class="card-header">
+                    <h3 class="card-title"><i data-lucide="calendar-range"></i> Season / Fiscal Year</h3>
+                </div>
+                <div id="season-settings-content">
+                    <div class="crop-no-data">Loading season data...</div>
+                </div>
+                <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-color)">
+                    <h4 class="crop-section-title" style="border:none;padding-top:0"><i data-lucide="plus-circle"></i> Create New Season</h4>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">Season Label <span class="required">*</span></label>
+                            <input class="form-input" id="season-label" placeholder="e.g. 2025-26">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Start Date <span class="required">*</span></label>
+                            <input class="form-input" type="date" id="season-start">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">End Date <span class="required">*</span></label>
+                            <input class="form-input" type="date" id="season-end">
+                        </div>
+                        <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px">
+                            <input type="checkbox" id="season-carry-forward" style="width:18px;height:18px;accent-color:var(--accent-primary)">
+                            <label for="season-carry-forward" class="form-label" style="margin:0;cursor:pointer">Carry forward inventory from current season</label>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" style="margin-top:16px" onclick="SeasonManager.startNewSeason()">
+                        <i data-lucide="play-circle"></i> Start New Season
+                    </button>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:20px">
                 <div class="card-header"><h3 class="card-title">Keyboard Shortcuts</h3></div>
                 <div class="summary-box" style="margin-top:0">
                     <div class="summary-row"><span class="summary-label"><kbd>Ctrl</kbd> + <kbd>N</kbd></span><span class="summary-value">New Purchase</span></div>
                     <div class="summary-row"><span class="summary-label"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>N</kbd></span><span class="summary-value">New Sale</span></div>
                     <div class="summary-row"><span class="summary-label"><kbd>Esc</kbd></span><span class="summary-value">Close Modal / Go to Dashboard</span></div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:20px">
+                <div class="card-header"><h3 class="card-title">Audit Trail</h3><button class="btn btn-ghost btn-sm" onclick="Settings.renderAudit()"><i data-lucide="refresh-cw"></i> Refresh</button></div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead><tr><th>Date</th><th>Action</th><th>Record</th><th class="text-right">Old Amount</th><th class="text-right">New Amount</th><th>Notes</th></tr></thead>
+                        <tbody id="audit-tbody"></tbody>
+                    </table>
                 </div>
             </div>
             <div class="card">
@@ -619,14 +882,16 @@
         <div class="modal-header"><h3 class="modal-title" id="pay-modal-title">Record Payment</h3><button class="modal-close" onclick="Utils.hideModal('payment-modal')">×</button></div>
         <div class="modal-body">
             <div class="form-grid">
+                <div class="form-group"><label class="form-label">Receipt No</label><input class="form-input" id="pay-receipt-id" readonly></div>
                 <div class="form-group"><label class="form-label">Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="pay-date"></div>
                 <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="pay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
                 <div class="form-group"><label class="form-label">Reference</label><input class="form-input" id="pay-ref" placeholder="Reference number..."></div>
+                <div class="form-group"><label class="form-label">Cash/Bank Account</label><select class="form-select" id="pay-account"></select></div>
                 <div class="form-group full-width"><label class="form-label">Notes</label><textarea class="form-textarea" id="pay-notes"></textarea></div>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('payment-modal')">Cancel</button><button class="btn btn-primary" id="pay-save-btn">Save Payment</button></div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('payment-modal')">Cancel</button><button class="btn btn-primary" id="pay-save-btn">Save Payment</button><button class="btn btn-success" id="pay-save-print-btn">Save & Print</button></div>
     </div>
 </div>
 
@@ -663,9 +928,49 @@
                 <div class="form-group"><label class="form-label">Amount (PKR)</label><input class="form-input" type="number" id="exp-amount" step="0.01"></div>
                 <div class="form-group"><label class="form-label">Crop (Optional)</label><select class="form-select" id="exp-crop"><option value="">None</option></select></div>
                 <div class="form-group"><label class="form-label">Linked Purchase Receipt (Optional)</label><select class="form-select" id="exp-receipt"><option value="">None</option></select></div>
+                <div class="form-group full-width"><label class="form-label">Pay From Account</label><select class="form-select" id="exp-account"></select></div>
             </div>
         </div>
         <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('expense-modal')">Cancel</button><button class="btn btn-primary" onclick="Expenses.save()">Save</button></div>
+    </div>
+</div>
+
+<!-- Opening Balance Modal -->
+<div class="modal-overlay" id="opening-balance-modal">
+    <div class="modal">
+        <div class="modal-header"><h3 class="modal-title">Add Opening Balance</h3><button class="modal-close" onclick="Utils.hideModal('opening-balance-modal')">×</button></div>
+        <div class="modal-body">
+            <div class="form-grid">
+                <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="ob-type" onchange="OpeningBalances.updateFields()"><option value="farmer_payable">Farmer Payable</option><option value="buyer_receivable">Buyer Receivable</option><option value="farmer_advance">Farmer Advance</option><option value="buyer_advance">Buyer Advance</option><option value="capital">Capital / Cash</option><option value="stock">Crop Stock</option></select></div>
+                <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="ob-date"></div>
+                <div class="form-group" id="ob-party-wrap"><label class="form-label">Party Name</label><input class="form-input" id="ob-party" list="ob-party-datalist"><datalist id="ob-party-datalist"></datalist></div>
+                <div class="form-group" id="ob-crop-wrap" style="display:none"><label class="form-label">Crop</label><select class="form-select" id="ob-crop"><option value="">Select Crop</option></select></div>
+                <div class="form-group" id="ob-account-wrap" style="display:none"><label class="form-label">Account</label><select class="form-select" id="ob-account"></select></div>
+                <div class="form-group" id="ob-weight-wrap" style="display:none"><label class="form-label">Weight (KG)</label><input class="form-input" type="number" id="ob-weight" step="0.01"></div>
+                <div class="form-group"><label class="form-label">Amount / Value (PKR)</label><input class="form-input" type="number" id="ob-amount" step="0.01"></div>
+                <div class="form-group full-width"><label class="form-label">Notes</label><textarea class="form-textarea" id="ob-notes"></textarea></div>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('opening-balance-modal')">Cancel</button><button class="btn btn-primary" onclick="OpeningBalances.save()">Save</button></div>
+    </div>
+</div>
+
+<!-- Stock Adjustment Modal -->
+<div class="modal-overlay" id="stock-adjustment-modal">
+    <div class="modal">
+        <div class="modal-header"><h3 class="modal-title">Add Stock Adjustment</h3><button class="modal-close" onclick="Utils.hideModal('stock-adjustment-modal')">×</button></div>
+        <div class="modal-body">
+            <div class="form-grid">
+                <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="sa-date"></div>
+                <div class="form-group"><label class="form-label">Crop</label><select class="form-select" id="sa-crop"><option value="">Select Crop</option></select></div>
+                <div class="form-group"><label class="form-label">Direction</label><select class="form-select" id="sa-direction"><option value="decrease">Decrease Stock</option><option value="increase">Increase Stock</option><option value="opening">Opening Stock</option></select></div>
+                <div class="form-group"><label class="form-label">Reason</label><select class="form-select" id="sa-reason"><option value="Shortage">Shortage</option><option value="Moisture Loss">Moisture Loss</option><option value="Damage">Damage</option><option value="Wastage">Wastage</option><option value="Correction">Correction</option><option value="Opening Stock">Opening Stock</option></select></div>
+                <div class="form-group"><label class="form-label">Weight (KG)</label><input class="form-input" type="number" id="sa-weight" step="0.01"></div>
+                <div class="form-group"><label class="form-label">Value Impact (PKR)</label><input class="form-input" type="number" id="sa-value" step="0.01" value="0"></div>
+                <div class="form-group full-width"><label class="form-label">Notes</label><textarea class="form-textarea" id="sa-notes"></textarea></div>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('stock-adjustment-modal')">Cancel</button><button class="btn btn-primary" onclick="StockAdjustments.save()">Save</button></div>
     </div>
 </div>
 
@@ -777,6 +1082,8 @@
 <script src="js/reports.js"></script>
 <script src="js/pdf.js"></script>
 <script src="js/export.js"></script>
+<script src="js/season-manager.js"></script>
+<script src="js/operations.js"></script>
 <script src="js/crop-analysis.js"></script>
 <script src="js/app.js"></script>
 </body>

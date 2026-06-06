@@ -1,6 +1,42 @@
 // ===== AgriSys Utilities =====
 
 const Utils = {
+    escapeHTML(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[ch]));
+    },
+
+    safeCreateIcons() {
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    },
+
+    hasExcel() {
+        return !!(window.XLSX && XLSX.utils && typeof XLSX.writeFile === 'function');
+    },
+
+    hasPDF() {
+        return !!(window.jspdf && window.jspdf.jsPDF);
+    },
+
+    requireExcel() {
+        if (this.hasExcel()) return true;
+        this.showToast('Excel export library is unavailable. Reconnect to the internet or bundle XLSX locally.', 'error');
+        return false;
+    },
+
+    requirePDF() {
+        if (this.hasPDF()) return true;
+        this.showToast('PDF library is unavailable. Reconnect to the internet or bundle jsPDF locally.', 'error');
+        return false;
+    },
+
     // Generate unique ID: date-based + random hex
     generateId() {
         const now = new Date();
@@ -63,6 +99,12 @@ const Utils = {
         return parseFloat(num).toFixed(decimals);
     },
 
+    // Round to 2 decimal places returning a number to fix floating point issues
+    roundCurrency(num) {
+        if (num === null || num === undefined || isNaN(num)) return 0;
+        return Math.round((parseFloat(num) + Number.EPSILON) * 100) / 100;
+    },
+
     // Format date to local format
     formatDate(dateStr) {
         if (!dateStr) return '';
@@ -78,7 +120,7 @@ const Utils = {
 
     // Get today's date in YYYY-MM-DD format for input fields
     todayISO() {
-        return new Date().toISOString().split('T')[0];
+        return this.dateToISO(new Date());
     },
 
     // Parse float safely
@@ -93,6 +135,18 @@ const Utils = {
         if (!container) return;
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
+        const text = document.createElement('span');
+        text.textContent = message;
+        const close = document.createElement('button');
+        close.className = 'toast-close';
+        close.type = 'button';
+        close.textContent = 'x';
+        close.onclick = () => toast.remove();
+        toast.appendChild(text);
+        toast.appendChild(close);
+        container.appendChild(toast);
+        setTimeout(() => { if (toast.parentElement) toast.remove(); }, 4000);
+        return;
         toast.innerHTML = `
             <span>${message}</span>
             <button class="toast-close" onclick="this.parentElement.remove()">×</button>
@@ -122,6 +176,56 @@ const Utils = {
             document.getElementById('confirm-no').onclick = () => { Utils.hideModal('confirm-modal'); resolve(false); };
             Utils.showModal('confirm-modal');
         });
+    },
+
+    async audit(action, entityType, entityId, details = {}) {
+        if (!DB.db) return;
+        try {
+            await DB.put('audit_logs', {
+                id: this.generateId(),
+                date: this.todayISO(),
+                action,
+                entityType,
+                entityId,
+                details,
+                createdAt: new Date().toISOString()
+            });
+        } catch (e) {
+            console.warn('Audit log failed:', e);
+        }
+    },
+
+    async populateCapitalAccountSelect(selectId, placeholder = 'Do not link account') {
+        const sel = document.getElementById(selectId);
+        if (!sel) return;
+        const accounts = await DB.getAll('capital_accounts');
+        sel.innerHTML = `<option value="">${this.escapeHTML(placeholder)}</option>` +
+            accounts.map(a => `<option value="${this.escapeHTML(a.id)}">${this.escapeHTML(a.name)}</option>`).join('');
+    },
+
+    async createLinkedCapitalTx({ accountId, type, amount, date, description, sourceStore, sourceId }) {
+        if (!accountId || amount <= 0) return null;
+        const tx = {
+            id: this.generateId(),
+            accountId,
+            type,
+            amount,
+            date,
+            description,
+            sourceStore,
+            sourceId,
+            isReconciled: false,
+            createdAt: new Date().toISOString()
+        };
+        await DB.put('capital_transactions', tx);
+        return tx;
+    },
+
+    async deleteLinkedCapitalTx(sourceStore, sourceId) {
+        const txs = await DB.getAll('capital_transactions');
+        const linked = txs.filter(t => t.sourceStore === sourceStore && t.sourceId === sourceId);
+        for (const tx of linked) await DB.delete('capital_transactions', tx.id);
+        return linked;
     },
 
     // Debounce
@@ -172,9 +276,15 @@ const Utils = {
 
     // Highlight search text in string
     highlightText(text, search) {
-        if (!search || !text) return text;
+        if (text === null || text === undefined) return '';
+        const raw = String(text);
+        if (!search) return this.escapeHTML(raw);
         const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return String(text).replace(new RegExp(`(${escaped})`, 'gi'), '<mark>$1</mark>');
+        return raw.split(new RegExp(`(${escaped})`, 'gi'))
+            .map(part => part.toLowerCase() === search.toLowerCase()
+                ? `<mark>${this.escapeHTML(part)}</mark>`
+                : this.escapeHTML(part))
+            .join('');
     },
 
     // Date range presets
@@ -204,7 +314,419 @@ const Utils = {
 
     // Convert Date to YYYY-MM-DD
     dateToISO(date) {
-        return date.toISOString().split('T')[0];
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    },
+
+    async getActiveSeason() {
+        return typeof SeasonManager !== 'undefined' ? SeasonManager.getActiveSeason() : null;
+    },
+
+    filterBySeason(records, season = null) {
+        if (!season) return records.filter(r => r.type !== 'opening_balance');
+        return records.filter(r => r.date >= season.startDate && r.date <= season.endDate);
+    },
+
+    async getSeasonScoped(storeName) {
+        const activeSeason = await this.getActiveSeason();
+        return this.filterBySeason(await DB.getAll(storeName), activeSeason);
+    },
+
+    applyStockAdjustments(purchases, sales, adjustments) {
+        const virtualPurchases = [];
+        const virtualSales = [];
+        adjustments.forEach(a => {
+            const weight = this.pf(a.weight);
+            if (!a.crop || weight <= 0) return;
+            const amount = this.pf(a.value);
+            if (a.direction === 'increase' || a.direction === 'opening') {
+                virtualPurchases.push({
+                    id: a.id,
+                    type: a.direction === 'opening' ? 'opening_stock' : 'stock_adjustment',
+                    farmerName: a.direction === 'opening' ? 'Opening Stock' : 'Stock Adjustment',
+                    date: a.date,
+                    crop: a.crop,
+                    method: 'scale',
+                    grossWeight: weight,
+                    perBagWeight: a.perBagWeight || 100,
+                    bagsCount: weight / (a.perBagWeight || 100),
+                    netWeight: weight,
+                    netBags: weight / (a.perBagWeight || 100),
+                    netMn: weight / 40,
+                    rate: weight > 0 ? amount / (weight / 40) : 0,
+                    amount,
+                    netPayableAmount: amount,
+                    amountPaid: amount,
+                    balance: 0,
+                    paymentStatus: 'paid',
+                    notes: a.reason || '',
+                    createdAt: a.createdAt
+                });
+            } else {
+                virtualSales.push({
+                    id: a.id,
+                    type: 'stock_adjustment',
+                    buyerName: 'Stock Adjustment',
+                    date: a.date,
+                    crop: a.crop,
+                    grossWeight: weight,
+                    perBagWeight: a.perBagWeight || 100,
+                    perBag: a.perBagWeight || 100,
+                    netWeight: weight,
+                    netMn: weight / 40,
+                    rate: 0,
+                    amount: 0,
+                    amountReceived: 0,
+                    balance: 0,
+                    paymentStatus: 'paid',
+                    notes: a.reason || '',
+                    createdAt: a.createdAt
+                });
+            }
+        });
+        return {
+            purchases: purchases.concat(virtualPurchases),
+            sales: sales.concat(virtualSales)
+        };
+    },
+
+    async partyOpeningBalance(type, partyName) {
+        const activeSeason = await this.getActiveSeason();
+        const balances = this.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        return balances
+            .filter(b => b.type === type && (b.partyName || '').toLowerCase() === (partyName || '').toLowerCase())
+            .reduce((sum, b) => sum + Math.max(0, (b.amount || 0) - (b.paidAmount || b.receivedAmount || b.settledAmount || 0)), 0);
+    },
+
+    openingBalanceSettled(record) {
+        return record.paidAmount || record.receivedAmount || record.settledAmount || 0;
+    },
+
+    purchaseCostAmount(purchase) {
+        const base = purchase.payableBeforeAdvance;
+        if (base !== undefined && base !== null) return base || 0;
+        return (purchase.netPayableAmount || purchase.amount || 0) + (purchase.advanceDeducted || 0);
+    },
+
+    purchasePayableAmount(purchase) {
+        return purchase.netPayableAmount || purchase.amount || 0;
+    },
+
+    paymentTotalFor(record, allPayments, linkField, paidField, asOfDate = null) {
+        const linked = allPayments.filter(p => p[linkField] === record.id);
+        const laterTotal = linked.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const initialPaid = Math.max(0, (record[paidField] || 0) - laterTotal);
+        const inScopeLater = linked
+            .filter(p => !asOfDate || !p.date || p.date <= asOfDate)
+            .reduce((sum, p) => sum + (p.amount || 0), 0);
+        return initialPaid + inScopeLater;
+    },
+
+    sortLedgerTransactions(transactions) {
+        return transactions.sort((a, b) => {
+            const ad = new Date(a.rawDate || a.createdAt || 0);
+            const bd = new Date(b.rawDate || b.createdAt || 0);
+            if (ad - bd !== 0) return ad - bd;
+            return String(a.sortKey || '').localeCompare(String(b.sortKey || ''));
+        });
+    },
+
+    async buildFarmerLedger(farmer, options = {}) {
+        const activeSeason = await this.getActiveSeason();
+        const from = options.from || '';
+        const to = options.to || '';
+        const includeOpening = options.includeOpening !== false;
+        const farmerName = farmer.name || farmer;
+        const fNameLower = farmerName.toLowerCase();
+        const purchases = this.filterBySeason(await DB.getAll('purchases'), activeSeason)
+            .filter(p => (p.farmerName || '').toLowerCase() === fNameLower);
+        const payments = this.filterBySeason(await DB.getAll('purchase_payments'), activeSeason)
+            .filter(p => (p.farmerName || '').toLowerCase() === fNameLower);
+        const openingPayments = this.filterBySeason(await DB.getAll('opening_balance_payments'), activeSeason)
+            .filter(p => p.type === 'farmer_payable' && (p.partyName || p.farmerName || '').toLowerCase() === fNameLower);
+        const openings = this.filterBySeason(await DB.getAll('opening_balances'), activeSeason)
+            .filter(o => (o.partyName || '').toLowerCase() === fNameLower);
+        const advances = this.filterBySeason(await DB.getAll('farmer_advances'), activeSeason)
+            .filter(a => (a.farmerName || '').toLowerCase() === fNameLower);
+
+        const transactions = [];
+
+        if (includeOpening) openings.filter(o => o.type === 'farmer_payable').forEach(o => {
+            transactions.push({
+                rawDate: o.date,
+                createdAt: o.createdAt,
+                sortKey: `0-${o.id}`,
+                date: this.formatDate(o.date),
+                ref: o.id,
+                type: 'Opening',
+                description: o.notes || 'Opening payable balance',
+                debit: 0,
+                credit: o.amount || 0
+            });
+        });
+
+        purchases.forEach(p => {
+            const totalBill = p.netPayableAmount || p.amount || 0;
+            transactions.push({
+                rawDate: p.date || p.createdAt,
+                createdAt: p.createdAt,
+                sortKey: `1-${p.id}`,
+                date: this.formatDate(p.date),
+                ref: p.id,
+                type: 'Purchase',
+                description: `${p.crop || 'Crop'} | ${this.formatNum(p.netWeight || 0, 2)} KG @ PKR ${this.formatPKR(p.rate || 0)}/Mn`,
+                debit: 0,
+                credit: totalBill
+            });
+
+            const laterPayments = payments.filter(pay => pay.purchaseId === p.id).reduce((s, pay) => s + (pay.amount || 0), 0);
+            const initialPaid = Math.max(0, (p.amountPaid || 0) - laterPayments);
+            if (initialPaid > 0) {
+                transactions.push({
+                    rawDate: p.date || p.createdAt,
+                    createdAt: p.createdAt,
+                    sortKey: `2-${p.id}`,
+                    date: this.formatDate(p.date),
+                    ref: p.id,
+                    type: 'Initial Payment',
+                    description: `Initial paid on purchase #${p.id}`,
+                    debit: initialPaid,
+                    credit: 0
+                });
+            }
+        });
+
+        payments.forEach(pay => {
+            transactions.push({
+                rawDate: pay.date || pay.createdAt,
+                createdAt: pay.createdAt,
+                sortKey: `3-${pay.id}`,
+                date: this.formatDate(pay.date),
+                ref: pay.receiptNo || pay.id,
+                type: 'Payment',
+                description: `Payment against #${pay.purchaseId} (${(pay.mode || 'Cash').toUpperCase()})${pay.reference ? ' Ref: ' + pay.reference : ''}`,
+                debit: pay.amount || 0,
+                credit: 0
+            });
+        });
+
+        openingPayments.forEach(pay => {
+            transactions.push({
+                rawDate: pay.date || pay.createdAt,
+                createdAt: pay.createdAt,
+                sortKey: `3-ob-${pay.id}`,
+                date: this.formatDate(pay.date),
+                ref: pay.receiptNo || pay.id,
+                type: 'Opening Payment',
+                description: `Payment against opening balance (${(pay.mode || 'Cash').toUpperCase()})${pay.reference ? ' Ref: ' + pay.reference : ''}`,
+                debit: pay.amount || 0,
+                credit: 0
+            });
+        });
+
+        let scopedTransactions = transactions;
+        if (from) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
+        if (to) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') <= to);
+        this.sortLedgerTransactions(scopedTransactions);
+        let balance = 0;
+        let totalDebit = 0;
+        let totalCredit = 0;
+        const rows = scopedTransactions.map(t => {
+            totalCredit += t.credit || 0;
+            totalDebit += t.debit || 0;
+            balance += (t.credit || 0) - (t.debit || 0);
+            return { ...t, balance };
+        });
+        const openAdvances = advances.reduce((sum, a) => sum + (a.amount || 0), 0) +
+            openings.filter(o => o.type === 'farmer_advance').reduce((sum, o) => sum + (o.amount || 0), 0);
+
+        return {
+            partyName: farmerName,
+            rows,
+            totals: { debit: totalDebit, credit: totalCredit, balance, openAdvances },
+            counts: { purchases: purchases.length, payments: payments.length + openingPayments.length },
+            period: { from, to }
+        };
+    },
+
+    async buildBuyerLedger(buyer, options = {}) {
+        const activeSeason = await this.getActiveSeason();
+        const from = options.from || '';
+        const to = options.to || '';
+        const includeOpening = options.includeOpening !== false;
+        const buyerName = buyer.name || buyer;
+        const bNameLower = buyerName.toLowerCase();
+        const sales = this.filterBySeason(await DB.getAll('sales'), activeSeason)
+            .filter(s => (s.buyerName || '').toLowerCase() === bNameLower);
+        const payments = this.filterBySeason(await DB.getAll('sale_payments'), activeSeason)
+            .filter(p => (p.buyerName || '').toLowerCase() === bNameLower);
+        const openingPayments = this.filterBySeason(await DB.getAll('opening_balance_payments'), activeSeason)
+            .filter(p => p.type === 'buyer_receivable' && (p.partyName || p.buyerName || '').toLowerCase() === bNameLower);
+        const openings = this.filterBySeason(await DB.getAll('opening_balances'), activeSeason)
+            .filter(o => (o.partyName || '').toLowerCase() === bNameLower);
+
+        const transactions = [];
+        if (includeOpening) openings.filter(o => o.type === 'buyer_receivable').forEach(o => {
+            transactions.push({
+                rawDate: o.date,
+                createdAt: o.createdAt,
+                sortKey: `0-${o.id}`,
+                date: this.formatDate(o.date),
+                ref: o.id,
+                type: 'Opening',
+                description: o.notes || 'Opening receivable balance',
+                debit: o.amount || 0,
+                credit: 0
+            });
+        });
+        if (includeOpening) openings.filter(o => o.type === 'buyer_advance').forEach(o => {
+            transactions.push({
+                rawDate: o.date,
+                createdAt: o.createdAt,
+                sortKey: `0-${o.id}`,
+                date: this.formatDate(o.date),
+                ref: o.id,
+                type: 'Opening Advance',
+                description: o.notes || 'Opening buyer advance',
+                debit: 0,
+                credit: o.amount || 0
+            });
+        });
+
+        sales.forEach(s => {
+            transactions.push({
+                rawDate: s.date || s.createdAt,
+                createdAt: s.createdAt,
+                sortKey: `1-${s.id}`,
+                date: this.formatDate(s.date),
+                ref: s.id,
+                type: 'Sale',
+                description: `${s.crop || 'Crop'} | ${this.formatNum(s.netWeight || 0, 2)} KG @ PKR ${this.formatPKR(s.rate || 0)}/Mn`,
+                debit: s.amount || 0,
+                credit: 0
+            });
+            const laterPayments = payments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
+            const initialReceived = Math.max(0, (s.amountReceived || 0) - laterPayments);
+            if (initialReceived > 0) {
+                transactions.push({
+                    rawDate: s.date || s.createdAt,
+                    createdAt: s.createdAt,
+                    sortKey: `2-${s.id}`,
+                    date: this.formatDate(s.date),
+                    ref: s.id,
+                    type: 'Initial Receipt',
+                    description: `Initial received on sale #${s.id}`,
+                    debit: 0,
+                    credit: initialReceived
+                });
+            }
+        });
+
+        payments.forEach(pay => {
+            transactions.push({
+                rawDate: pay.date || pay.createdAt,
+                createdAt: pay.createdAt,
+                sortKey: `3-${pay.id}`,
+                date: this.formatDate(pay.date),
+                ref: pay.receiptNo || pay.id,
+                type: 'Receipt',
+                description: `Receipt for #${pay.saleId} (${(pay.mode || 'Cash').toUpperCase()})${pay.reference ? ' Ref: ' + pay.reference : ''}`,
+                debit: 0,
+                credit: pay.amount || 0
+            });
+        });
+
+        openingPayments.forEach(pay => {
+            transactions.push({
+                rawDate: pay.date || pay.createdAt,
+                createdAt: pay.createdAt,
+                sortKey: `3-ob-${pay.id}`,
+                date: this.formatDate(pay.date),
+                ref: pay.receiptNo || pay.id,
+                type: 'Opening Receipt',
+                description: `Receipt against opening balance (${(pay.mode || 'Cash').toUpperCase()})${pay.reference ? ' Ref: ' + pay.reference : ''}`,
+                debit: 0,
+                credit: pay.amount || 0
+            });
+        });
+
+        let scopedTransactions = transactions;
+        if (from) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
+        if (to) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') <= to);
+        this.sortLedgerTransactions(scopedTransactions);
+        let balance = 0;
+        let totalDebit = 0;
+        let totalCredit = 0;
+        const rows = scopedTransactions.map(t => {
+            totalDebit += t.debit || 0;
+            totalCredit += t.credit || 0;
+            balance += (t.debit || 0) - (t.credit || 0);
+            return { ...t, balance };
+        });
+
+        return {
+            partyName: buyerName,
+            rows,
+            totals: { debit: totalDebit, credit: totalCredit, balance },
+            counts: { sales: sales.length, payments: payments.length + openingPayments.length },
+            period: { from, to }
+        };
+    },
+
+    calculateInventoryLots(purchases, sales, expenses = []) {
+        const expenseByPurchase = {};
+        expenses.forEach(e => {
+            if (e.purchaseId) expenseByPurchase[e.purchaseId] = (expenseByPurchase[e.purchaseId] || 0) + (e.amount || 0);
+        });
+
+        const lotsByCrop = {};
+        purchases
+            .slice()
+            .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0))
+            .forEach(p => {
+                if (!p.crop || (p.netWeight || 0) <= 0) return;
+                const cost = this.purchaseCostAmount(p) + (expenseByPurchase[p.id] || 0);
+                if (!lotsByCrop[p.crop]) lotsByCrop[p.crop] = [];
+                lotsByCrop[p.crop].push({
+                    remainingWeight: p.netWeight || 0,
+                    costPerKg: cost / (p.netWeight || 1)
+                });
+            });
+
+        const result = {};
+        sales
+            .slice()
+            .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0))
+            .forEach(s => {
+                if (!s.crop) return;
+                if (!result[s.crop]) result[s.crop] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
+                let remainingToSell = s.netWeight || 0;
+                let saleCogs = 0;
+                result[s.crop].soldWeight += remainingToSell;
+                result[s.crop].revenue += s.amount || 0;
+                const lots = lotsByCrop[s.crop] || [];
+                for (const lot of lots) {
+                    if (remainingToSell <= 0) break;
+                    const used = Math.min(lot.remainingWeight, remainingToSell);
+                    const usedCost = used * lot.costPerKg;
+                    result[s.crop].cogs += usedCost;
+                    saleCogs += usedCost;
+                    lot.remainingWeight -= used;
+                    remainingToSell -= used;
+                }
+                result[s.crop].saleCogs[s.id] = saleCogs;
+                if (remainingToSell > 0) result[s.crop].oversoldWeight += remainingToSell;
+            });
+
+        Object.entries(lotsByCrop).forEach(([crop, lots]) => {
+            if (!result[crop]) result[crop] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
+            result[crop].inventoryWeight = lots.reduce((sum, lot) => sum + lot.remainingWeight, 0);
+            result[crop].inventoryValue = lots.reduce((sum, lot) => sum + (lot.remainingWeight * lot.costPerKg), 0);
+        });
+
+        return result;
     },
 
     // Apply date preset to inputs

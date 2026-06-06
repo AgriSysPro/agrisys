@@ -13,8 +13,8 @@ const Bookkeeping = {
 
         let html = entries.map(e => `<tr>
             <td>${Utils.formatDate(e.date)}</td>
-            <td>${e.description}</td>
-            <td>${e.account}</td>
+            <td>${Utils.escapeHTML(e.description)}</td>
+            <td>${Utils.escapeHTML(e.account)}</td>
             <td class="text-right">${e.debit ? 'PKR ' + Utils.formatPKR(e.debit) : ''}</td>
             <td class="text-right">${e.credit ? 'PKR ' + Utils.formatPKR(e.credit) : ''}</td>
         </tr>`).join('');
@@ -39,24 +39,105 @@ const Bookkeeping = {
     },
 
     async generateEntries(from, to) {
-        const purchases = await DB.getAll('purchases');
-        const sales = await DB.getAll('sales');
-        const pPayments = await DB.getAll('purchase_payments');
-        const sPayments = await DB.getAll('sale_payments');
-        const expenses = await DB.getAll('expenses');
+        const activeSeason = await Utils.getActiveSeason();
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const pPayments = Utils.filterBySeason(await DB.getAll('purchase_payments'), activeSeason);
+        const sPayments = Utils.filterBySeason(await DB.getAll('sale_payments'), activeSeason);
+        const obPayments = Utils.filterBySeason(await DB.getAll('opening_balance_payments'), activeSeason);
+        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason);
+        const expenses = Utils.filterBySeason(await DB.getAll('expenses'), activeSeason);
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        const accounts = await DB.getAll('capital_accounts');
+        const capitalTxs = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
         let entries = [];
+
+        accounts.forEach(a => {
+            const opening = a.openingBalance || 0;
+            if (opening > 0) {
+                entries.push({ date: a.createdAt ? Utils.dateToISO(new Date(a.createdAt)) : Utils.todayISO(), description: `Opening capital: ${a.name}`, account: 'Cash / Bank', debit: opening, credit: 0, type: 'opening' });
+                entries.push({ date: a.createdAt ? Utils.dateToISO(new Date(a.createdAt)) : Utils.todayISO(), description: `Opening capital: ${a.name}`, account: 'Owner Capital', debit: 0, credit: opening, type: 'opening' });
+            }
+        });
+
+        openings.forEach(o => {
+            if (o.type === 'farmer_payable') {
+                entries.push({ date: o.date, description: `Opening payable: ${o.partyName}`, account: 'Opening Equity', debit: o.amount, credit: 0, type: 'opening' });
+                entries.push({ date: o.date, description: `Opening payable: ${o.partyName}`, account: 'Accounts Payable (Farmer)', debit: 0, credit: o.amount, type: 'opening' });
+            } else if (o.type === 'buyer_receivable') {
+                entries.push({ date: o.date, description: `Opening receivable: ${o.partyName}`, account: 'Accounts Receivable (Buyer)', debit: o.amount, credit: 0, type: 'opening' });
+                entries.push({ date: o.date, description: `Opening receivable: ${o.partyName}`, account: 'Opening Equity', debit: 0, credit: o.amount, type: 'opening' });
+            } else if (o.type === 'farmer_advance') {
+                entries.push({ date: o.date, description: `Opening farmer advance: ${o.partyName}`, account: 'Advances to Farmers', debit: o.amount, credit: 0, type: 'opening' });
+                entries.push({ date: o.date, description: `Opening farmer advance: ${o.partyName}`, account: 'Opening Equity', debit: 0, credit: o.amount, type: 'opening' });
+            } else if (o.type === 'buyer_advance') {
+                entries.push({ date: o.date, description: `Opening buyer advance: ${o.partyName}`, account: 'Opening Equity', debit: o.amount, credit: 0, type: 'opening' });
+                entries.push({ date: o.date, description: `Opening buyer advance: ${o.partyName}`, account: 'Advances from Buyers', debit: 0, credit: o.amount, type: 'opening' });
+            } else if (o.type === 'stock') {
+                entries.push({ date: o.date, description: `Opening stock: ${o.crop}`, account: 'Inventory / Purchases', debit: o.amount, credit: 0, type: 'opening' });
+                entries.push({ date: o.date, description: `Opening stock: ${o.crop}`, account: 'Opening Equity', debit: 0, credit: o.amount, type: 'opening' });
+            } else if (o.type === 'capital') {
+                entries.push({ date: o.date, description: 'Opening cash / bank balance', account: 'Cash / Bank', debit: o.amount, credit: 0, type: 'opening' });
+                entries.push({ date: o.date, description: 'Opening cash / bank balance', account: 'Owner Capital', debit: 0, credit: o.amount, type: 'opening' });
+            }
+        });
+
+        capitalTxs.filter(t => !t.sourceStore).forEach(t => {
+            if (t.type === 'deposit') {
+                entries.push({ date: t.date, description: t.description || 'Capital deposit', account: 'Cash / Bank', debit: t.amount, credit: 0, type: 'capital' });
+                entries.push({ date: t.date, description: t.description || 'Capital deposit', account: 'Owner Capital', debit: 0, credit: t.amount, type: 'capital' });
+            } else {
+                entries.push({ date: t.date, description: t.description || 'Capital withdrawal', account: 'Owner Drawings', debit: t.amount, credit: 0, type: 'capital' });
+                entries.push({ date: t.date, description: t.description || 'Capital withdrawal', account: 'Cash / Bank', debit: 0, credit: t.amount, type: 'capital' });
+            }
+        });
 
         // ── Purchase entries (Double-entry) ──
         purchases.forEach(p => {
-            const amt = p.netPayableAmount || p.amount || 0;
-            entries.push({ date: p.date, description: `Purchase: ${p.farmerName} - ${p.crop} (#${p.id})`, account: 'Inventory / Purchases', debit: amt, credit: 0, type: 'purchase' });
-            entries.push({ date: p.date, description: `Purchase: ${p.farmerName} - ${p.crop} (#${p.id})`, account: 'Accounts Payable (Farmer)', debit: 0, credit: amt, type: 'purchase' });
+            const inventoryCost = Utils.purchaseCostAmount(p);
+            const payable = Utils.purchasePayableAmount(p);
+            const advanceRecovered = p.advanceDeducted || Math.max(0, inventoryCost - payable);
+            entries.push({ date: p.date, description: `Purchase: ${p.farmerName} - ${p.crop} (#${p.id})`, account: 'Inventory / Purchases', debit: inventoryCost, credit: 0, type: 'purchase' });
+            if (payable > 0) {
+                entries.push({ date: p.date, description: `Purchase payable: ${p.farmerName} - ${p.crop} (#${p.id})`, account: 'Accounts Payable (Farmer)', debit: 0, credit: payable, type: 'purchase' });
+            }
+            if (advanceRecovered > 0) {
+                entries.push({ date: p.date, description: `Advance recovered from purchase #${p.id}`, account: 'Advances to Farmers', debit: 0, credit: advanceRecovered, type: 'advance' });
+            }
+            const laterPayments = pPayments.filter(pay => pay.purchaseId === p.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
+            const initialPaid = Math.max(0, (p.amountPaid || 0) - laterPayments);
+            if (initialPaid > 0) {
+                entries.push({ date: p.date, description: `Initial payment to: ${p.farmerName} (#${p.id})`, account: 'Accounts Payable (Farmer)', debit: initialPaid, credit: 0, type: 'payment' });
+                entries.push({ date: p.date, description: `Initial payment to: ${p.farmerName} (#${p.id})`, account: 'Cash / Bank', debit: 0, credit: initialPaid, type: 'payment' });
+            }
+        });
+
+        // Calculate inventory lots to get COGS per sale
+        const inventoryMetrics = Utils.calculateInventoryLots(purchases, sales, expenses);
+        const saleCogsMap = {};
+        Object.values(inventoryMetrics).forEach(lots => {
+            if (lots.saleCogs) {
+                Object.assign(saleCogsMap, lots.saleCogs);
+            }
         });
 
         // ── Sale entries ──
         sales.forEach(s => {
             entries.push({ date: s.date, description: `Sale: ${s.buyerName} - ${s.crop} (#${s.id})`, account: 'Accounts Receivable (Buyer)', debit: s.amount, credit: 0, type: 'sale' });
             entries.push({ date: s.date, description: `Sale: ${s.buyerName} - ${s.crop} (#${s.id})`, account: 'Sales Revenue', debit: 0, credit: s.amount, type: 'sale' });
+            
+            const cogs = saleCogsMap[s.id] || 0;
+            if (cogs > 0) {
+                entries.push({ date: s.date, description: `COGS for Sale #${s.id}`, account: 'Cost of Goods Sold', debit: cogs, credit: 0, type: 'cogs' });
+                entries.push({ date: s.date, description: `Inventory reduction for Sale #${s.id}`, account: 'Inventory / Purchases', debit: 0, credit: cogs, type: 'cogs' });
+            }
+
+            const laterReceipts = sPayments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
+            const initialReceived = Math.max(0, (s.amountReceived || 0) - laterReceipts);
+            if (initialReceived > 0) {
+                entries.push({ date: s.date, description: `Initial receipt from: ${s.buyerName} (#${s.id})`, account: 'Cash / Bank', debit: initialReceived, credit: 0, type: 'receipt' });
+                entries.push({ date: s.date, description: `Initial receipt from: ${s.buyerName} (#${s.id})`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: initialReceived, type: 'receipt' });
+            }
         });
 
         // ── Purchase payment entries ──
@@ -72,10 +153,33 @@ const Bookkeeping = {
         });
 
         // ── Expense entries ──
+        advances.filter(a => (a.amount || 0) > 0).forEach(a => {
+            entries.push({ date: a.date, description: `Advance paid to farmer: ${a.farmerName}`, account: 'Advances to Farmers', debit: a.amount, credit: 0, type: 'advance' });
+            entries.push({ date: a.date, description: `Advance paid to farmer: ${a.farmerName}`, account: 'Cash / Bank', debit: 0, credit: a.amount, type: 'advance' });
+        });
+
+        obPayments.forEach(p => {
+            if (p.type === 'farmer_payable') {
+                entries.push({ date: p.date, description: `Opening payment to: ${p.partyName} [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Payable (Farmer)', debit: p.amount, credit: 0, type: 'payment' });
+                entries.push({ date: p.date, description: `Opening payment to: ${p.partyName} [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: 0, credit: p.amount, type: 'payment' });
+            } else if (p.type === 'buyer_receivable') {
+                entries.push({ date: p.date, description: `Opening receipt from: ${p.partyName} [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: p.amount, credit: 0, type: 'receipt' });
+                entries.push({ date: p.date, description: `Opening receipt from: ${p.partyName} [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: p.amount, type: 'receipt' });
+            }
+        });
+
         expenses.forEach(e => {
             const desc = `Expense: ${e.type}${e.description ? ' - ' + e.description : ''}`;
-            entries.push({ date: e.date, description: desc, account: 'Operating Expenses', debit: e.amount, credit: 0, type: 'expense' });
+            const accountName = e.purchaseId ? 'Inventory / Purchases' : 'Operating Expenses';
+            entries.push({ date: e.date, description: desc, account: accountName, debit: e.amount, credit: 0, type: 'expense' });
             entries.push({ date: e.date, description: desc, account: 'Cash / Bank', debit: 0, credit: e.amount, type: 'expense' });
+        });
+
+        // ── Manual Journal Entries ──
+        const journalEntries = await DB.getAll('journal_entries') || [];
+        journalEntries.forEach(j => {
+            entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: j.debitAccount, debit: j.amount, credit: 0, type: 'journal' });
+            entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: j.creditAccount, debit: 0, credit: j.amount, type: 'journal' });
         });
 
         // Filter by date range
@@ -92,6 +196,7 @@ const Bookkeeping = {
     },
 
     async exportExcel() {
+        if (!Utils.requireExcel()) return;
         const entries = await this.generateEntries(document.getElementById('bk-from').value, document.getElementById('bk-to').value);
         if (!entries.length) { Utils.showToast('No data to export', 'warning'); return; }
         
@@ -117,6 +222,7 @@ const Bookkeeping = {
     },
 
     async exportPDF() {
+        if (!Utils.requirePDF()) return;
         const from = document.getElementById('bk-from').value;
         const to = document.getElementById('bk-to').value;
         const entries = await this.generateEntries(from, to);
@@ -223,6 +329,95 @@ const Bookkeeping = {
         } catch (err) {
             Utils.hideLoading();
             Utils.showToast('PDF error: ' + err.message, 'error');
+        }
+    }
+};
+
+// ===== Manual Journal Entry Module =====
+const Journal = {
+    accounts: [
+        'Cash / Bank',
+        'Accounts Payable (Farmer)',
+        'Accounts Receivable (Buyer)',
+        'Inventory / Purchases',
+        'Cost of Goods Sold (COGS)',
+        'Sales Revenue',
+        'Operating Expenses',
+        'Advances to Farmers',
+        'Capital Account',
+        'Drawings / Dividends',
+        'Other Income'
+    ],
+
+    async showModal() {
+        document.getElementById('jv-date').value = Utils.todayISO();
+        document.getElementById('jv-desc').value = '';
+        document.getElementById('jv-amt').value = '';
+        
+        const populateSelect = async (id) => {
+            const sel = document.getElementById(id);
+            sel.innerHTML = '<option value="">Select Account</option>';
+            
+            // Add standard accounts
+            this.accounts.forEach(acc => {
+                sel.insertAdjacentHTML('beforeend', `<option value="${acc}">${acc}</option>`);
+            });
+
+            // Add capital accounts
+            const capAccounts = await DB.getAll('capital_accounts') || [];
+            capAccounts.forEach(c => {
+                const name = `Capital: ${c.name}`;
+                if(!this.accounts.includes(name)) {
+                    sel.insertAdjacentHTML('beforeend', `<option value="${name}">${name}</option>`);
+                }
+            });
+        };
+
+        await populateSelect('jv-dr');
+        await populateSelect('jv-cr');
+        
+        Utils.showModal('journal-modal');
+    },
+
+    async save() {
+        const date = document.getElementById('jv-date').value;
+        const desc = document.getElementById('jv-desc').value.trim();
+        const dr = document.getElementById('jv-dr').value;
+        const cr = document.getElementById('jv-cr').value;
+        const amt = parseFloat(document.getElementById('jv-amt').value) || 0;
+
+        if (!date || !dr || !cr || amt <= 0) {
+            Utils.showToast('Please fill all fields and enter a valid amount', 'error');
+            return;
+        }
+
+        if (dr === cr) {
+            Utils.showToast('Debit and Credit accounts must be different', 'error');
+            return;
+        }
+
+        const entry = {
+            id: 'JV-' + Date.now(),
+            date,
+            description: desc,
+            debitAccount: dr,
+            creditAccount: cr,
+            amount: amt,
+            created_at: new Date().toISOString()
+        };
+
+        await DB.add('journal_entries', entry);
+        Utils.hideModal('journal-modal');
+        Utils.showToast('Journal Entry saved!');
+        
+        if (App.currentSection === 'bookkeeping') {
+            Bookkeeping.render();
+        } else if (App.currentSection === 'general-ledger') {
+            FinanceReports.renderGeneralLedger();
+        } else if (App.currentSection === 'trial-balance') {
+            FinanceReports.renderTrialBalance();
+        } else if (App.currentSection === 'cash-book') {
+            FinanceReports.renderCashBook();
         }
     }
 };

@@ -2,7 +2,7 @@
 const ReceiptPDF = {
 
     // ── Shared header helper ──
-    drawHeader(doc, biz, cx, lx, rx, startY) {
+    drawHeader(doc, biz, cx, lx, rx, startY, template = {}) {
         let y = startY;
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(15);
@@ -16,6 +16,10 @@ const ReceiptPDF = {
         y += 4;
         doc.text('Phone: ' + (biz.phone || '-'), cx, y, { align: 'center' });
         y += 3;
+        if (template.showOwner !== false && biz.ownerName) {
+            doc.text('Owner: ' + biz.ownerName, cx, y, { align: 'center' });
+            y += 3;
+        }
 
         // Double rule
         doc.setLineWidth(0.8);
@@ -30,7 +34,25 @@ const ReceiptPDF = {
     async getQRCode(text) {
         if (typeof QRCode === 'undefined') return null;
         try {
-            return await QRCode.toDataURL(text, { margin: 1, width: 100 });
+            if (typeof QRCode.toDataURL === 'function') {
+                return await QRCode.toDataURL(text, { margin: 1, width: 100 });
+            }
+
+            const holder = document.createElement('div');
+            holder.style.position = 'fixed';
+            holder.style.left = '-9999px';
+            document.body.appendChild(holder);
+            new QRCode(holder, {
+                text,
+                width: 100,
+                height: 100,
+                correctLevel: QRCode.CorrectLevel ? QRCode.CorrectLevel.M : undefined
+            });
+            const canvas = holder.querySelector('canvas');
+            const img = holder.querySelector('img');
+            const dataUrl = canvas ? canvas.toDataURL('image/png') : (img ? img.src : null);
+            holder.remove();
+            return dataUrl;
         } catch (e) {
             console.error('QR code generation failed', e);
             return null;
@@ -100,26 +122,31 @@ const ReceiptPDF = {
 
     // =================== PURCHASE RECEIPT ===================
     async generatePurchase(data, id) {
+        if (!Utils.requirePDF()) return;
         try {
             Utils.showLoading('Generating Purchase PDF...');
             if (!data && id) data = await DB.get('purchases', id);
             if (!data) { Utils.hideLoading(); Utils.showToast('Receipt not found', 'error'); return; }
             const biz = await Settings.getBusiness();
+            const template = await Settings.getReceiptTemplate();
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
             const qrText = `AgriSys Purchase\nID: ${data.id}\nDate: ${data.date}\nFarmer: ${data.farmerName}\nNet Payable: PKR ${data.netPayableAmount || data.amount}`;
-            const qrImage = await this.getQRCode(qrText);
+            const qrImage = template.showQR === false ? null : await this.getQRCode(qrText);
 
-            this.drawPurchaseCopy(doc, data, biz, 3, 'CUSTOMER COPY', qrImage);
-            // Center divider (dashed)
-            doc.setLineWidth(0.2);
-            doc.setDrawColor(150);
-            doc.setLineDashPattern([2, 2], 0);
-            doc.line(148.5, 5, 148.5, 205);
-            doc.setLineDashPattern([], 0);
-            doc.setDrawColor(0);
-            this.drawPurchaseCopy(doc, data, biz, 152, 'SHOP COPY', qrImage);
+            if (template.copyLayout === 'single-copy') {
+                this.drawPurchaseCopy(doc, data, biz, 77.5, 'CUSTOMER COPY', qrImage, template);
+            } else {
+                this.drawPurchaseCopy(doc, data, biz, 3, 'CUSTOMER COPY', qrImage, template);
+                doc.setLineWidth(0.2);
+                doc.setDrawColor(150);
+                doc.setLineDashPattern([2, 2], 0);
+                doc.line(148.5, 5, 148.5, 205);
+                doc.setLineDashPattern([], 0);
+                doc.setDrawColor(0);
+                this.drawPurchaseCopy(doc, data, biz, 152, 'SHOP COPY', qrImage, template);
+            }
 
             doc.save('Purchase_' + data.id + '.pdf');
             Utils.hideLoading();
@@ -131,7 +158,7 @@ const ReceiptPDF = {
         }
     },
 
-    drawPurchaseCopy(doc, data, biz, startX, copyLabel, qrImage) {
+    drawPurchaseCopy(doc, data, biz, startX, copyLabel, qrImage, template = {}) {
         const W = 142, M = 6;
         const x = startX;
         const lx = x + M;
@@ -152,7 +179,7 @@ const ReceiptPDF = {
         this.drawWatermark(doc, data, cx, lx, y);
 
         // Header
-        y = this.drawHeader(doc, biz, cx, lx, rx, y);
+        y = this.drawHeader(doc, biz, cx, lx, rx, y, template);
 
         // Title
         doc.setFont('helvetica', 'bold');
@@ -297,7 +324,9 @@ const ReceiptPDF = {
 
         // Signatures
         y += 10;
-        y = this.drawSignatures(doc, lx, rx, y, 'Farmer Signature', 'Authorized Signature');
+        if (template.showSignatures !== false) {
+            y = this.drawSignatures(doc, lx, rx, y, 'Farmer Signature', 'Authorized Signature');
+        }
 
         // Footer box
         y += 5;
@@ -324,31 +353,36 @@ const ReceiptPDF = {
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(7);
-        doc.text(biz.bizName || 'AGRISYS', cx, y + footerH + 3, { align: 'center' });
+        doc.text(template.footerText || biz.bizName || 'AGRISYS', cx, y + footerH + 3, { align: 'center' });
     },
 
     // =================== SALE RECEIPT ===================
     async generateSale(data, id) {
+        if (!Utils.requirePDF()) return;
         try {
             Utils.showLoading('Generating Sale PDF...');
             if (!data && id) data = await DB.get('sales', id);
             if (!data) { Utils.hideLoading(); Utils.showToast('Receipt not found', 'error'); return; }
             const biz = await Settings.getBusiness();
+            const template = await Settings.getReceiptTemplate();
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
             const qrText = `AgriSys Sale\nID: ${data.id}\nDate: ${data.date}\nBuyer: ${data.buyerName}\nNet Amount: PKR ${data.amount}`;
-            const qrImage = await this.getQRCode(qrText);
+            const qrImage = template.showQR === false ? null : await this.getQRCode(qrText);
 
-            this.drawSaleCopy(doc, data, biz, 3, 'BUYER COPY', qrImage);
-            // Center divider
-            doc.setLineWidth(0.2);
-            doc.setDrawColor(150);
-            doc.setLineDashPattern([2, 2], 0);
-            doc.line(148.5, 5, 148.5, 205);
-            doc.setLineDashPattern([], 0);
-            doc.setDrawColor(0);
-            this.drawSaleCopy(doc, data, biz, 152, 'SHOP COPY', qrImage);
+            if (template.copyLayout === 'single-copy') {
+                this.drawSaleCopy(doc, data, biz, 77.5, 'BUYER COPY', qrImage, template);
+            } else {
+                this.drawSaleCopy(doc, data, biz, 3, 'BUYER COPY', qrImage, template);
+                doc.setLineWidth(0.2);
+                doc.setDrawColor(150);
+                doc.setLineDashPattern([2, 2], 0);
+                doc.line(148.5, 5, 148.5, 205);
+                doc.setLineDashPattern([], 0);
+                doc.setDrawColor(0);
+                this.drawSaleCopy(doc, data, biz, 152, 'SHOP COPY', qrImage, template);
+            }
 
             doc.save('Sale_' + data.id + '.pdf');
             Utils.hideLoading();
@@ -360,7 +394,7 @@ const ReceiptPDF = {
         }
     },
 
-    drawSaleCopy(doc, data, biz, startX, copyLabel, qrImage) {
+    drawSaleCopy(doc, data, biz, startX, copyLabel, qrImage, template = {}) {
         const W = 142, M = 6;
         const x = startX, lx = x + M, rx = x + W - M, cx = x + W / 2, cw = W - M * 2;
 
@@ -376,7 +410,7 @@ const ReceiptPDF = {
         this.drawWatermark(doc, data, cx, lx, y);
 
         // Header
-        y = this.drawHeader(doc, biz, cx, lx, rx, y);
+        y = this.drawHeader(doc, biz, cx, lx, rx, y, template);
 
         // Title
         doc.setFont('helvetica', 'bold');
@@ -509,7 +543,9 @@ const ReceiptPDF = {
 
         // Signatures
         y += 10;
-        y = this.drawSignatures(doc, lx, rx, y, 'Buyer Signature', 'Authorized Signature');
+        if (template.showSignatures !== false) {
+            y = this.drawSignatures(doc, lx, rx, y, 'Buyer Signature', 'Authorized Signature');
+        }
 
         // Footer
         y += 5;
@@ -536,78 +572,28 @@ const ReceiptPDF = {
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(7);
-        doc.text(biz.bizName || 'AGRISYS', cx, y + footerH + 3, { align: 'center' });
+        doc.text(template.footerText || biz.bizName || 'AGRISYS', cx, y + footerH + 3, { align: 'center' });
     },
 
     // =================== FARMER LEDGER ===================
-    async generateFarmerLedger(farmerId) {
+    async generateFarmerLedger(farmerId, options = {}) {
+        if (!Utils.requirePDF()) return;
         try {
             Utils.showLoading('Generating Farmer Ledger...');
             const farmer = await DB.get('farmers', farmerId);
             if (!farmer) { Utils.hideLoading(); Utils.showToast('Farmer not found', 'error'); return; }
 
             const biz = await Settings.getBusiness();
-            const allPurchases = await DB.getAll('purchases');
-            const allPayments = await DB.getAll('purchase_payments');
-
-            const fNameLower = farmer.name.toLowerCase();
-            const fp = allPurchases.filter(p => p.farmerName.toLowerCase() === fNameLower);
-            const payments = allPayments.filter(p => p.farmerName.toLowerCase() === fNameLower);
-
-            let transactions = [];
-
-            fp.forEach(p => {
-                const totalBill = p.netPayableAmount || p.amount || 0;
-                transactions.push({
-                    date: new Date(p.date || p.createdAt),
-                    dateStr: Utils.formatDate(p.date),
-                    desc: `Purchase #${p.id} - ${p.crop} (${Utils.formatNum(p.netWeight, 2)} KG @ PKR ${Utils.formatPKR(p.rate)}/Mn)`,
-                    payable: totalBill,
-                    paid: 0
-                });
-
-                const laterPayments = payments.filter(pay => pay.purchaseId === p.id).reduce((s, pay) => s + (pay.amount || 0), 0);
-                const initialPaid = (p.amountPaid || 0) - laterPayments;
-                
-                if (initialPaid > 0) {
-                    transactions.push({
-                        date: new Date(p.date || p.createdAt),
-                        dateStr: Utils.formatDate(p.date),
-                        desc: `  > Advance Payment for #${p.id}`,
-                        payable: 0,
-                        paid: initialPaid
-                    });
-                }
-            });
-
-            payments.forEach(pay => {
-                transactions.push({
-                    date: new Date(pay.date || pay.createdAt),
-                    dateStr: Utils.formatDate(pay.date),
-                    desc: `Payment [${pay.mode || 'Cash'}] for #${pay.purchaseId}` + (pay.reference ? ` (Ref: ${pay.reference})` : ''),
-                    payable: 0,
-                    paid: pay.amount || 0
-                });
-            });
-
-            transactions.sort((a, b) => a.date - b.date);
-
-            let balance = 0;
-            let totalPayable = 0;
-            let totalPaid = 0;
-            const tableBody = transactions.map(t => {
-                balance += t.payable;
-                balance -= t.paid;
-                totalPayable += t.payable;
-                totalPaid += t.paid;
-                return [
-                    t.dateStr,
-                    t.desc,
-                    t.payable > 0 ? 'PKR ' + Utils.formatPKR(t.payable) : '',
-                    t.paid > 0 ? 'PKR ' + Utils.formatPKR(t.paid) : '',
-                    'PKR ' + Utils.formatPKR(balance)
-                ];
-            });
+            const ledger = await Utils.buildFarmerLedger(farmer, options);
+            const tableBody = ledger.rows.map(t => [
+                t.date,
+                t.ref || '',
+                t.type,
+                t.description,
+                t.debit > 0 ? 'PKR ' + Utils.formatPKR(t.debit) : '',
+                t.credit > 0 ? 'PKR ' + Utils.formatPKR(t.credit) : '',
+                'PKR ' + Utils.formatPKR(t.balance)
+            ]);
 
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -655,32 +641,44 @@ const ReceiptPDF = {
             doc.text(Utils.formatDate(new Date().toISOString()), 163, 50);
 
             doc.setFont('helvetica', 'bold');
-            doc.text('Total Purchases:', 130, 56);
+            doc.text('Purchases / Payments:', 130, 56);
             doc.setFont('helvetica', 'normal');
-            doc.text(String(fp.length), 163, 56);
+            doc.text(`${ledger.counts.purchases} / ${ledger.counts.payments}`, 170, 56);
+            doc.setFontSize(7);
+            doc.text(`Period: ${options.from ? Utils.formatDate(options.from) : 'Start'} to ${options.to ? Utils.formatDate(options.to) : 'Today'}`, 105, 64, { align: 'center' });
 
             // Ledger Table
             doc.autoTable({
-                startY: 66,
-                head: [['Date', 'Description', 'Payable (+)', 'Paid (-)', 'Balance']],
+                startY: 70,
+                margin: { top: 18, left: 15, right: 15 },
+                head: [['Date', 'Ref', 'Type', 'Description', 'Paid (-)', 'Payable (+)', 'Balance']],
                 body: tableBody,
                 foot: [[
-                    '', 'TOTALS',
-                    'PKR ' + Utils.formatPKR(totalPayable),
-                    'PKR ' + Utils.formatPKR(totalPaid),
-                    'PKR ' + Utils.formatPKR(balance)
+                    '', '', 'TOTALS', '',
+                    'PKR ' + Utils.formatPKR(ledger.totals.debit),
+                    'PKR ' + Utils.formatPKR(ledger.totals.credit),
+                    'PKR ' + Utils.formatPKR(ledger.totals.balance)
                 ]],
                 theme: 'grid',
-                headStyles: { fillColor: [40, 40, 40], textColor: 255, fontStyle: 'bold', fontSize: 8 },
-                footStyles: { fillColor: [240, 240, 240], textColor: 0, fontStyle: 'bold', fontSize: 8 },
-                styles: { fontSize: 7.5, font: 'helvetica', textColor: 20, lineColor: 180, lineWidth: 0.15, cellPadding: 2.5 },
+                headStyles: { fillColor: [35, 35, 35], textColor: 255, fontStyle: 'bold', fontSize: 7 },
+                footStyles: { fillColor: [235, 235, 235], textColor: 0, fontStyle: 'bold', fontSize: 7 },
+                styles: { fontSize: 6.7, font: 'helvetica', textColor: 20, lineColor: 180, lineWidth: 0.12, cellPadding: 1.8 },
                 alternateRowStyles: { fillColor: [250, 250, 250] },
                 columnStyles: {
-                    0: { cellWidth: 22 },
-                    1: { cellWidth: 'auto' },
-                    2: { halign: 'right', cellWidth: 28 },
-                    3: { halign: 'right', cellWidth: 28 },
-                    4: { halign: 'right', cellWidth: 30, fontStyle: 'bold' }
+                    0: { cellWidth: 18 },
+                    1: { cellWidth: 20 },
+                    2: { cellWidth: 20 },
+                    3: { cellWidth: 'auto' },
+                    4: { halign: 'right', cellWidth: 24 },
+                    5: { halign: 'right', cellWidth: 26 },
+                    6: { halign: 'right', cellWidth: 28, fontStyle: 'bold' }
+                },
+                didDrawPage: (data) => {
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(120);
+                    doc.text(`Farmer Ledger - ${farmer.name}`, 15, 290);
+                    doc.text(`Page ${data.pageNumber}`, 195, 290, { align: 'right' });
+                    doc.setTextColor(0);
                 }
             });
 
@@ -689,10 +687,11 @@ const ReceiptPDF = {
 
             // Balance box
             doc.setLineWidth(0.5);
+            const balance = ledger.totals.balance;
             const balText = balance > 0
                 ? `BALANCE DUE: SHOP OWES FARMER  PKR ${Utils.formatPKR(balance)}`
                 : balance < 0
-                    ? `BALANCE DUE: FARMER OWES SHOP  PKR ${Utils.formatPKR(Math.abs(balance))}  (Advance)`
+                    ? `BALANCE DUE: FARMER OWES SHOP  PKR ${Utils.formatPKR(Math.abs(balance))}`
                     : 'BALANCE CLEARED - ALL ACCOUNTS SETTLED (PKR 0.00)';
 
             doc.rect(15, fy - 4, 180, 10, 'S');
@@ -718,5 +717,103 @@ const ReceiptPDF = {
             console.error('Ledger PDF error:', err);
             Utils.showToast('PDF error: ' + err.message, 'error');
         }
+    },
+
+    async generatePaymentVoucher(payment, source, type) {
+        if (!Utils.requirePDF()) return;
+        try {
+            Utils.showLoading('Generating Payment Voucher...');
+            const biz = await Settings.getBusiness();
+            const template = await Settings.getReceiptTemplate();
+            const account = payment.accountId ? await DB.get('capital_accounts', payment.accountId) : null;
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+            if (template.copyLayout === 'single-copy') {
+                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 77.5, type === 'farmer' ? 'FARMER COPY' : 'BUYER COPY', template);
+            } else {
+                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 3, type === 'farmer' ? 'FARMER COPY' : 'BUYER COPY', template);
+                doc.setLineDashPattern([2, 2], 0);
+                doc.line(148.5, 8, 148.5, 202);
+                doc.setLineDashPattern([], 0);
+                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 152, 'SHOP COPY', template);
+            }
+
+            const filePrefix = type === 'farmer' ? 'Farmer_Payment' : 'Buyer_Receipt';
+            doc.save(`${filePrefix}_${payment.receiptNo || payment.id}.pdf`);
+            Utils.hideLoading();
+            Utils.showToast('Payment voucher PDF generated!');
+        } catch (err) {
+            Utils.hideLoading();
+            console.error('Payment voucher PDF error:', err);
+            Utils.showToast('PDF error: ' + err.message, 'error');
+        }
+    },
+
+    drawPaymentVoucherCopy(doc, payment, source, type, biz, account, startX, copyLabel, template = {}) {
+        const W = 142, M = 7;
+        const lx = startX + M, rx = startX + W - M, cx = startX + W / 2;
+        let y = 12;
+        const isFarmer = type === 'farmer';
+        const partyLabel = isFarmer ? 'Farmer:' : 'Buyer:';
+        const partyName = isFarmer ? payment.farmerName : payment.buyerName;
+        const sourceLabel = payment.sourceLabel || (isFarmer ? 'Purchase Receipt:' : 'Sale Receipt:');
+        const sourceId = payment.sourceRef || (isFarmer ? payment.purchaseId : payment.saleId);
+        const title = isFarmer ? 'FARMER PAYMENT VOUCHER' : 'BUYER RECEIPT VOUCHER';
+        const amountLabel = isFarmer ? 'Amount Paid' : 'Amount Received';
+        const beforeLabel = isFarmer ? 'Previous Payable' : 'Previous Receivable';
+        const afterLabel = isFarmer ? 'New Payable' : 'New Receivable';
+
+        doc.setDrawColor(0);
+        doc.setTextColor(0);
+        doc.setLineWidth(0.35);
+        doc.rect(startX, 8, W, 186);
+
+        y = this.drawHeader(doc, biz, cx, lx, rx, y, template);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text(title, cx, y + 3, { align: 'center' });
+        y += 8;
+        doc.setFontSize(7);
+        doc.text(copyLabel, rx, y, { align: 'right' });
+        y += 4;
+
+        y = this.drawInfoRow(doc, lx, rx, y, 'Voucher No:', payment.receiptNo || payment.id, true);
+        y = this.drawInfoRow(doc, lx, rx, y, partyLabel, partyName || '-', true);
+        y = this.drawInfoRow(doc, lx, rx, y, sourceLabel, sourceId || '-', false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Date:', Utils.formatDate(payment.date), false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Mode:', (payment.mode || 'cash').toUpperCase(), false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Reference:', payment.reference || '-', false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Account:', account ? account.name : 'Not linked', false);
+        y += 3;
+
+        doc.setFillColor(245, 245, 245);
+        doc.rect(lx, y, rx - lx, 29, 'F');
+        doc.setLineWidth(0.2);
+        doc.rect(lx, y, rx - lx, 29);
+        y += 7;
+        y = this.drawDataRow(doc, lx + 2, rx - 2, y, beforeLabel, 'PKR ' + Utils.formatPKR(payment.previousBalance || 0));
+        y = this.drawDataRow(doc, lx + 2, rx - 2, y, amountLabel, 'PKR ' + Utils.formatPKR(payment.amount || 0), true);
+        y = this.drawDataRow(doc, lx + 2, rx - 2, y, afterLabel, 'PKR ' + Utils.formatPKR(payment.newBalance || 0), true);
+        y += 8;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(16);
+        doc.text('PKR ' + Utils.formatPKR(payment.amount || 0), cx, y, { align: 'center' });
+        y += 8;
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        const notes = payment.notes || 'No notes';
+        doc.text('Notes: ' + notes, lx, y, { maxWidth: rx - lx });
+        y += 18;
+
+        if (template.showSignatures !== false) {
+            this.drawSignatures(doc, lx, rx, 176, isFarmer ? 'Farmer Signature' : 'Buyer Signature', 'Authorized Signature');
+        }
+        doc.setFontSize(6);
+        doc.setTextColor(120);
+        doc.text((template.footerText || 'Auto-generated by AgriSys') + ' | ' + new Date().toLocaleString(), cx, 190, { align: 'center' });
+        doc.setTextColor(0);
     }
 };

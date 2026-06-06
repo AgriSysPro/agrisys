@@ -8,12 +8,20 @@ const Settings = {
         expenseTypes: 'Labour,Transport,Diesel,Rent,Utility,Misc',
         perBagWeight: 100,
         defaultBardana: 1,
-        defaultLabour: 0.5
+        defaultLabour: 0.5,
+        receiptTemplate: {
+            footerText: 'Thank you for your business',
+            copyLayout: 'two-copy',
+            showQR: true,
+            showSignatures: true,
+            showOwner: true
+        }
     },
 
     async init() {
         const biz = await DB.getSetting('business');
         const defs = await DB.getSetting('defaults');
+        const template = await this.getReceiptTemplate();
         if (biz) {
             document.getElementById('set-biz-name').value = biz.bizName || '';
             document.getElementById('set-address').value = biz.address || '';
@@ -34,6 +42,14 @@ const Settings = {
             document.getElementById('set-bardana').value = defs.defaultBardana || 1;
             document.getElementById('set-labour').value = defs.defaultLabour || 0.5;
         }
+        const footer = document.getElementById('set-receipt-footer');
+        if (footer) {
+            footer.value = template.footerText || '';
+            document.getElementById('set-receipt-layout').value = template.copyLayout || 'two-copy';
+            document.getElementById('set-receipt-qr').checked = template.showQR !== false;
+            document.getElementById('set-receipt-signatures').checked = template.showSignatures !== false;
+            document.getElementById('set-receipt-owner').checked = template.showOwner !== false;
+        }
         return !!biz;
     },
 
@@ -45,6 +61,11 @@ const Settings = {
     async getDefaults() {
         const defs = await DB.getSetting('defaults');
         return defs || { perBagWeight: 100, defaultBardana: 1, defaultLabour: 0.5 };
+    },
+
+    async getReceiptTemplate() {
+        const saved = await DB.getSetting('receiptTemplate');
+        return { ...this.defaults.receiptTemplate, ...(saved || {}) };
     },
 
     async getCrops() {
@@ -88,6 +109,48 @@ const Settings = {
         Utils.showToast('Default values saved!');
     },
 
+    async saveReceiptTemplate() {
+        const data = {
+            footerText: document.getElementById('set-receipt-footer').value.trim() || this.defaults.receiptTemplate.footerText,
+            copyLayout: document.getElementById('set-receipt-layout').value || 'two-copy',
+            showQR: document.getElementById('set-receipt-qr').checked,
+            showSignatures: document.getElementById('set-receipt-signatures').checked,
+            showOwner: document.getElementById('set-receipt-owner').checked
+        };
+        await DB.setSetting('receiptTemplate', data);
+        await Utils.audit('update', 'settings', 'receiptTemplate', { type: 'receipt_template' });
+        Utils.showToast('Receipt template saved!');
+    },
+
+    async renderAudit() {
+        const tbody = document.getElementById('audit-tbody');
+        if (!tbody) return;
+        let logs = [];
+        try {
+            logs = await DB.getAll('audit_logs');
+        } catch (e) {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color:var(--text-muted)">Audit log is unavailable until the database upgrades.</td></tr>';
+            return;
+        }
+        logs.sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
+        tbody.innerHTML = logs.slice(0, 50).map(log => {
+            const d = log.details || {};
+            const notes = [
+                d.farmerName || d.buyerName || '',
+                d.receiptNo ? `Receipt ${d.receiptNo}` : '',
+                d.capitalTxId ? `Capital ${d.capitalTxId}` : ''
+            ].filter(Boolean).join(' | ');
+            return `<tr>
+                <td>${Utils.formatDateTime(log.createdAt || log.date)}</td>
+                <td><span class="badge badge-info">${Utils.escapeHTML(log.action)}</span></td>
+                <td>${Utils.escapeHTML(log.entityType)} #${Utils.escapeHTML(log.entityId)}</td>
+                <td class="text-right">${d.oldAmount === null || d.oldAmount === undefined ? '-' : 'PKR ' + Utils.formatPKR(d.oldAmount)}</td>
+                <td class="text-right">${d.newAmount === null || d.newAmount === undefined ? '-' : 'PKR ' + Utils.formatPKR(d.newAmount)}</td>
+                <td>${Utils.escapeHTML(notes || d.type || '-')}</td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="text-center" style="color:var(--text-muted)">No audit entries yet</td></tr>';
+    },
+
     async backup() {
         try {
             Utils.showLoading('Creating backup...');
@@ -96,7 +159,7 @@ const Settings = {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `AgriSys_Backup_${new Date().toISOString().slice(0,10)}.json`;
+            a.download = `AgriSys_Backup_${Utils.todayISO()}.json`;
             a.click();
             URL.revokeObjectURL(url);
             Utils.hideLoading();
@@ -113,6 +176,11 @@ const Settings = {
             Utils.showLoading('Restoring data...');
             const text = await file.text();
             const data = JSON.parse(text);
+            
+            if (!data || typeof data !== 'object' || !data._version) {
+                throw new Error('Invalid backup file format. Missing version info.');
+            }
+            
             await DB.importAll(data);
             Utils.hideLoading();
             Utils.showToast('Data restored! Reloading...');
@@ -124,7 +192,7 @@ const Settings = {
     async clearAll() {
         const ok = await Utils.confirm('This will DELETE ALL DATA permanently. Are you sure?');
         if (!ok) return;
-        const stores = ['settings','purchases','farmers','purchase_payments','sales','sale_payments','expenses','capital_accounts','capital_transactions','buyers'];
+        const stores = ['settings','purchases','farmers','purchase_payments','sales','sale_payments','expenses','capital_accounts','capital_transactions','buyers','farmer_advances','seasons','audit_logs','opening_balances','stock_adjustments','opening_balance_payments'];
         for (const s of stores) await DB.clear(s);
         Utils.showToast('All data cleared! Reloading...');
         setTimeout(() => location.reload(), 1500);

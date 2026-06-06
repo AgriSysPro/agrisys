@@ -3,7 +3,7 @@
 const DB = {
     db: null,
     DB_NAME: 'AgriSysDB',
-    DB_VERSION: 3,
+    DB_VERSION: 8,
 
     async init() {
         return new Promise((resolve, reject) => {
@@ -89,6 +89,56 @@ const DB = {
                     store.createIndex('farmerName', 'farmerName');
                     store.createIndex('date', 'date');
                 }
+
+                // V7: Deductions table
+                if (!db.objectStoreNames.contains('deductions')) {
+                    const store = db.createObjectStore('deductions', { keyPath: 'id' });
+                    store.createIndex('purchaseId', 'purchaseId');
+                }
+
+                // V8: Manual Journal Entries table
+                if (!db.objectStoreNames.contains('journal_entries')) {
+                    const store = db.createObjectStore('journal_entries', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                }
+
+                // V4: Seasons store
+                if (!db.objectStoreNames.contains('seasons')) {
+                    const store = db.createObjectStore('seasons', { keyPath: 'id' });
+                    store.createIndex('active', 'active');
+                }
+
+                // V5: Audit trail
+                if (!db.objectStoreNames.contains('audit_logs')) {
+                    const store = db.createObjectStore('audit_logs', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('entityType', 'entityType');
+                    store.createIndex('entityId', 'entityId');
+                    store.createIndex('action', 'action');
+                }
+
+                // V6: Opening balances and stock adjustments
+                if (!db.objectStoreNames.contains('opening_balances')) {
+                    const store = db.createObjectStore('opening_balances', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('type', 'type');
+                    store.createIndex('partyName', 'partyName');
+                }
+                if (!db.objectStoreNames.contains('stock_adjustments')) {
+                    const store = db.createObjectStore('stock_adjustments', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('crop', 'crop');
+                    store.createIndex('direction', 'direction');
+                }
+
+                // V7: Payments made against opening party balances
+                if (!db.objectStoreNames.contains('opening_balance_payments')) {
+                    const store = db.createObjectStore('opening_balance_payments', { keyPath: 'id' });
+                    store.createIndex('openingBalanceId', 'openingBalanceId');
+                    store.createIndex('partyName', 'partyName');
+                    store.createIndex('date', 'date');
+                    store.createIndex('type', 'type');
+                }
             };
 
             request.onsuccess = (e) => { this.db = e.target.result; resolve(); };
@@ -168,6 +218,27 @@ const DB = {
         });
     },
 
+    // Execute multiple operations in a single atomic transaction
+    async transact(storeNames, mode, callback) {
+        return new Promise(async (resolve, reject) => {
+            const tx = this.db.transaction(storeNames, mode);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(new Error('Transaction aborted'));
+            
+            try {
+                const stores = {};
+                storeNames.forEach(name => {
+                    stores[name] = tx.objectStore(name);
+                });
+                await callback(stores, tx);
+            } catch (err) {
+                try { tx.abort(); } catch(e) {}
+                reject(err);
+            }
+        });
+    },
+
     // Settings helpers
     async getSetting(key) {
         const record = await this.get('settings', key);
@@ -180,7 +251,7 @@ const DB = {
 
     // Backup all data
     async exportAll() {
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments'];
         const data = {};
         for (const s of stores) {
             data[s] = await this.getAll(s);
@@ -192,7 +263,7 @@ const DB = {
 
     // Restore all data
     async importAll(data) {
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments'];
         for (const s of stores) {
             if (data[s]) {
                 await this.clear(s);

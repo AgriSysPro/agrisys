@@ -13,13 +13,14 @@ const Purchasing = {
         document.getElementById('p-weight-per-bag').value = defs.perBagWeight || 100;
         document.getElementById('p-bardana').value = defs.defaultBardana || 0;
         document.getElementById('p-labour').value = defs.defaultLabour || 0;
+        await Utils.populateCapitalAccountSelect('p-initial-account', 'Select cash/bank account');
         await this.loadFarmerDatalist();
     },
 
     async loadFarmerDatalist() {
         const farmers = await DB.getAll('farmers');
         const dl = document.getElementById('farmer-datalist');
-        dl.innerHTML = farmers.map(f => `<option value="${f.name}">`).join('');
+        dl.innerHTML = farmers.map(f => `<option value="${Utils.escapeHTML(f.name)}">`).join('');
     },
 
     async loadFarmerAdvances() {
@@ -29,8 +30,7 @@ const Purchasing = {
             display.textContent = 'PKR 0.00';
             return;
         }
-        const advances = await DB.getAll('farmer_advances');
-        const openAdv = advances.filter(a => a.farmerName.toLowerCase() === farmerName.toLowerCase()).reduce((s, a) => s + a.amount, 0);
+        const openAdv = await this.getAvailableAdvance(farmerName, this.editingId);
         display.textContent = 'PKR ' + Utils.formatPKR(openAdv);
     },
 
@@ -61,7 +61,7 @@ const Purchasing = {
             <div class="deduction-row">
                 <div class="form-group">
                     <label class="form-label">Name</label>
-                    <input class="form-input" value="${d.name}" placeholder="Deduction name" onchange="Purchasing.updateDeduction(${d.id},'name',this.value)">
+                    <input class="form-input" value="${Utils.escapeHTML(d.name)}" placeholder="Deduction name" onchange="Purchasing.updateDeduction(${d.id},'name',this.value)">
                 </div>
                 <div class="form-group">
                     <label class="form-label">Amount</label>
@@ -70,7 +70,8 @@ const Purchasing = {
                 <div class="form-group">
                     <label class="form-label">Unit</label>
                     <select class="form-select" onchange="Purchasing.updateDeduction(${d.id},'unit',this.value); Purchasing.calculate()">
-                        <option value="kg" ${d.unit==='kg'?'selected':''}>KG</option>
+                        <option value="kg" ${d.unit==='kg'?'selected':''}>KG Total</option>
+                        <option value="kg_per_bag" ${d.unit==='kg_per_bag'?'selected':''}>KG per Bag</option>
                         <option value="pkr" ${d.unit==='pkr'?'selected':''}>PKR</option>
                         <option value="bags" ${d.unit==='bags'?'selected':''}>Bags</option>
                     </select>
@@ -79,7 +80,7 @@ const Purchasing = {
                 <button class="btn btn-icon btn-danger btn-sm" onclick="Purchasing.removeDeduction(${d.id})" title="Remove">×</button>
             </div>
         `).join('');
-        lucide.createIcons();
+        Utils.safeCreateIcons();
     },
 
     updateDeduction(id, field, value) {
@@ -118,6 +119,9 @@ const Purchasing = {
         this.additionalDeductions.forEach(d => {
             let dedKg = 0, dedPkr = 0;
             if (d.unit === 'kg') {
+                dedKg = d.amount;
+                totalKgDeductions += dedKg;
+            } else if (d.unit === 'kg_per_bag') {
                 dedKg = d.amount * bagsCount;
                 totalKgDeductions += dedKg;
             } else if (d.unit === 'bags') {
@@ -131,15 +135,14 @@ const Purchasing = {
             if (el) el.textContent = d.unit === 'pkr' ? 'PKR ' + Utils.formatPKR(dedPkr) : Utils.formatNum(dedKg, 2) + ' KG';
         });
 
-        const pDeductAdv = Utils.pf(document.getElementById('p-deduct-advance').value);
-        totalPkrDeductions += pDeductAdv;
-
         const netWeight = Math.max(0, grossWeight - totalKgDeductions);
         const netBags = perBagWeight > 0 ? netWeight / perBagWeight : 0;
         const netMn = netWeight / 40;
         const rate = Utils.pf(document.getElementById('p-rate').value);
-        const amount = netMn * rate;
-        const netPayableAmount = Math.max(0, amount - totalPkrDeductions);
+        const amount = Utils.roundCurrency(netMn * rate);
+        const advanceDeducted = Utils.pf(document.getElementById('p-deduct-advance').value);
+        const payableBeforeAdvance = Math.max(0, Utils.roundCurrency(amount - totalPkrDeductions));
+        const netPayableAmount = Math.max(0, Utils.roundCurrency(payableBeforeAdvance - advanceDeducted));
 
         // Update displays
         document.getElementById('calc-gross').textContent = Utils.formatNum(grossWeight, 2) + ' KG';
@@ -148,14 +151,14 @@ const Purchasing = {
         document.getElementById('calc-net-bags').textContent = Utils.formatNum(netBags, 2);
         document.getElementById('calc-net-mn').textContent = Utils.formatNum(netMn, 2);
         document.getElementById('calc-amount').textContent = 'PKR ' + Utils.formatPKR(amount);
-        document.getElementById('calc-pkr-deductions').textContent = 'PKR ' + Utils.formatPKR(totalPkrDeductions);
+        document.getElementById('calc-pkr-deductions').textContent = 'PKR ' + Utils.formatPKR(totalPkrDeductions + advanceDeducted);
         document.getElementById('calc-net-amount').textContent = 'PKR ' + Utils.formatPKR(netPayableAmount);
 
         // Payment balance
         const status = document.getElementById('p-payment-status').value;
         let amountPaid = Utils.pf(document.getElementById('p-amount-paid').value);
         if (status === 'paid') { amountPaid = netPayableAmount; document.getElementById('p-amount-paid').value = netPayableAmount.toFixed(2); }
-        const balance = netPayableAmount - amountPaid;
+        const balance = Utils.roundCurrency(netPayableAmount - amountPaid);
         document.getElementById('calc-balance').textContent = 'PKR ' + Utils.formatPKR(balance);
     },
 
@@ -174,7 +177,7 @@ const Purchasing = {
         this.scaleImage = null;
         document.getElementById('p-scale-image').value = '';
         document.getElementById('scale-slip-area').innerHTML = `<i data-lucide="image-plus" style="width:32px;height:32px;color:var(--text-muted)"></i><span class="upload-text">Click to upload scale weight slip</span>`;
-        lucide.createIcons();
+        Utils.safeCreateIcons();
     },
 
     getData() {
@@ -198,7 +201,7 @@ const Purchasing = {
         let totalPkrDed = 0;
         const addDeds = this.additionalDeductions.map(d => {
             let totalKg = 0, totalPkr = 0;
-            if (d.unit === 'kg') { totalKg = d.amount * bagsCount; totalKgDed += totalKg; }
+            if (d.unit === 'kg') { totalKg = d.amount; totalKgDed += totalKg; }
             else if (d.unit === 'bags') { totalKg = d.amount * perBagWeight; totalKgDed += totalKg; }
             else if (d.unit === 'pkr') { totalPkr = d.amount; totalPkrDed += totalPkr; }
             return { ...d, totalKg, totalPkr };
@@ -208,12 +211,12 @@ const Purchasing = {
         const netBags = perBagWeight > 0 ? netWeight / perBagWeight : 0;
         const netMn = netWeight / 40;
         const rate = Utils.pf(document.getElementById('p-rate').value);
-        const amount = netMn * rate;
+        const amount = Utils.roundCurrency(netMn * rate);
         
         const advanceDeducted = Utils.pf(document.getElementById('p-deduct-advance').value);
-        totalPkrDed += advanceDeducted;
-        
-        const netPayableAmount = Math.max(0, amount - totalPkrDed);
+        const pkrDeductionsBeforeAdvance = totalPkrDed;
+        const payableBeforeAdvance = Math.max(0, Utils.roundCurrency(amount - pkrDeductionsBeforeAdvance));
+        const netPayableAmount = Math.max(0, Utils.roundCurrency(payableBeforeAdvance - advanceDeducted));
         const paymentStatus = document.getElementById('p-payment-status').value;
         let amountPaid = Utils.pf(document.getElementById('p-amount-paid').value);
         if (paymentStatus === 'paid') amountPaid = netPayableAmount;
@@ -226,47 +229,111 @@ const Purchasing = {
             method, grossWeight, perBagWeight, bagsCount,
             bardanaPerBag, labourPerBag, bardanaTotal, labourTotal,
             additionalDeductions: addDeds,
-            totalKgDeductions: totalKgDed, totalPkrDeductions: totalPkrDed,
+            totalKgDeductions: totalKgDed,
+            totalPkrDeductions: totalPkrDed + advanceDeducted,
+            pkrDeductionsBeforeAdvance,
+            payableBeforeAdvance,
             advanceDeducted,
             netWeight, netBags, netMn, rate, amount, netPayableAmount,
             paymentStatus, amountPaid,
-            balance: netPayableAmount - amountPaid,
+            balance: Utils.roundCurrency(netPayableAmount - amountPaid),
+            dueDate: document.getElementById('p-due-date').value || '',
+            initialPaymentAccountId: document.getElementById('p-initial-account') ? document.getElementById('p-initial-account').value : '',
             notes: document.getElementById('p-notes').value.trim(),
             scaleImage: this.scaleImage,
             createdAt: new Date().toISOString()
         };
     },
 
-    validate(data) {
+    async getAvailableAdvance(farmerName, purchaseId = null) {
+        const activeSeason = await Utils.getActiveSeason();
+        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason)
+            .filter(a => (a.farmerName || '').toLowerCase() === (farmerName || '').toLowerCase() && a.purchaseId !== purchaseId);
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason)
+            .filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === (farmerName || '').toLowerCase());
+        return advances.reduce((s, a) => s + (a.amount || 0), 0) + openings.reduce((s, o) => s + (o.amount || 0), 0);
+    },
+
+    async validate(data) {
         if (!data.farmerName) { Utils.showToast('Farmer name is required', 'error'); return false; }
         if (!data.crop) { Utils.showToast('Crop is required', 'error'); return false; }
         if (data.grossWeight <= 0) { Utils.showToast('Weight must be greater than 0', 'error'); return false; }
         if (data.rate <= 0) { Utils.showToast('Rate must be greater than 0', 'error'); return false; }
+        if (data.amountPaid < 0) { Utils.showToast('Paid amount cannot be negative', 'error'); return false; }
+        if (data.amountPaid > data.netPayableAmount) { Utils.showToast('Paid amount cannot exceed net payable amount', 'error'); return false; }
+        const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+        const laterPaid = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPaid);
+        if (initialPaid > 0 && !data.initialPaymentAccountId) { Utils.showToast('Select cash/bank account for initial payment', 'error'); return false; }
+        const availableAdvance = await this.getAvailableAdvance(data.farmerName, data.id);
+        if ((data.advanceDeducted || 0) > availableAdvance + 0.01) {
+            Utils.showToast(`Advance deduction cannot exceed available advance PKR ${Utils.formatPKR(availableAdvance)}`, 'error');
+            return false;
+        }
         return true;
     },
 
     async processAdvanceDeduction(data) {
-        if (data.advanceDeducted || 0) {
-            const all = await DB.getAll('farmer_advances');
-            const existing = all.filter(a => a.purchaseId === data.id);
-            for (const e of existing) await DB.delete('farmer_advances', e.id);
-            if (data.advanceDeducted > 0) {
-                await DB.put('farmer_advances', {
-                    id: Utils.generateId(), farmerName: data.farmerName, amount: -data.advanceDeducted,
-                    date: data.date, notes: `Deducted in Purchase #${data.id}`, purchaseId: data.id, 
-                    createdAt: new Date().toISOString()
-                });
-            }
+        const all = await DB.getAll('farmer_advances');
+        const existing = all.filter(a => a.purchaseId === data.id);
+        for (const e of existing) await DB.delete('farmer_advances', e.id);
+        if ((data.advanceDeducted || 0) > 0) {
+            await DB.put('farmer_advances', {
+                id: Utils.generateId(), farmerName: data.farmerName, amount: -data.advanceDeducted,
+                date: data.date, notes: `Deducted in Purchase #${data.id}`, purchaseId: data.id, 
+                createdAt: new Date().toISOString()
+            });
         }
+    },
+
+    async syncInitialPaymentTx(data) {
+        await Utils.deleteLinkedCapitalTx('purchases', data.id);
+        const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+        const laterPayments = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPayments);
+        data.initialPaymentAmount = initialPaid;
+        data.initialCapitalTxId = null;
+        if (initialPaid > 0 && data.initialPaymentAccountId) {
+            const tx = await Utils.createLinkedCapitalTx({
+                accountId: data.initialPaymentAccountId,
+                type: 'withdrawal',
+                amount: initialPaid,
+                date: data.date,
+                description: `Initial payment to farmer ${data.farmerName} for purchase #${data.id}`,
+                sourceStore: 'purchases',
+                sourceId: data.id
+            });
+            if (tx) data.initialCapitalTxId = tx.id;
+        }
+        await DB.put('purchases', data);
     },
 
     async save() {
         const data = this.getData();
-        if (!this.validate(data)) return;
+        if (!await this.validate(data)) return;
+        const existing = await DB.get('purchases', data.id);
+        if (existing) {
+            const payments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+            const oldAmount = existing.netPayableAmount || existing.amount || 0;
+            const newAmount = data.netPayableAmount || data.amount || 0;
+            if (payments.length && Math.abs(oldAmount - newAmount) > 0.01) {
+                const ok = await Utils.confirm(`This purchase has ${payments.length} linked payment(s). Change amount from PKR ${Utils.formatPKR(oldAmount)} to PKR ${Utils.formatPKR(newAmount)}?`);
+                if (!ok) return;
+            }
+            data.createdAt = existing.createdAt || data.createdAt;
+            data.updatedAt = new Date().toISOString();
+        }
         await DB.put('purchases', data);
         await Utils.confirmReceiptId('purchase', data.id);
         await Farmers.ensureFarmer(data.farmerName);
         await this.processAdvanceDeduction(data);
+        await this.syncInitialPaymentTx(data);
+        await Utils.audit(existing ? 'update' : 'create', 'purchase', data.id, {
+            oldAmount: existing ? (existing.netPayableAmount || existing.amount || 0) : null,
+            newAmount: data.netPayableAmount || data.amount || 0,
+            oldRecord: existing || null,
+            newRecord: data
+        });
         Utils.showToast('Purchase receipt saved!');
         this.clearForm();
         return data;
@@ -274,11 +341,30 @@ const Purchasing = {
 
     async saveAndPrint() {
         const data = this.getData();
-        if (!this.validate(data)) return;
+        if (!await this.validate(data)) return;
+        const existing = await DB.get('purchases', data.id);
+        if (existing) {
+            const payments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+            const oldAmount = existing.netPayableAmount || existing.amount || 0;
+            const newAmount = data.netPayableAmount || data.amount || 0;
+            if (payments.length && Math.abs(oldAmount - newAmount) > 0.01) {
+                const ok = await Utils.confirm(`This purchase has ${payments.length} linked payment(s). Change amount from PKR ${Utils.formatPKR(oldAmount)} to PKR ${Utils.formatPKR(newAmount)}?`);
+                if (!ok) return;
+            }
+            data.createdAt = existing.createdAt || data.createdAt;
+            data.updatedAt = new Date().toISOString();
+        }
         await DB.put('purchases', data);
         await Utils.confirmReceiptId('purchase', data.id);
         await Farmers.ensureFarmer(data.farmerName);
         await this.processAdvanceDeduction(data);
+        await this.syncInitialPaymentTx(data);
+        await Utils.audit(existing ? 'update' : 'create', 'purchase', data.id, {
+            oldAmount: existing ? (existing.netPayableAmount || existing.amount || 0) : null,
+            newAmount: data.netPayableAmount || data.amount || 0,
+            oldRecord: existing || null,
+            newRecord: data
+        });
         Utils.showToast('Receipt saved! Generating PDF...');
         Utils.showLoading('Generating PDF...');
         await ReceiptPDF.generatePurchase(data);
@@ -298,8 +384,12 @@ const Purchasing = {
         document.getElementById('p-num-bags').value = '';
         document.getElementById('p-rate').value = '';
         document.getElementById('p-amount-paid').value = '0';
+        if (document.getElementById('p-initial-account')) {
+            await Utils.populateCapitalAccountSelect('p-initial-account', 'Select cash/bank account');
+        }
         document.getElementById('p-payment-status').value = 'pending';
         document.getElementById('p-notes').value = '';
+        document.getElementById('p-due-date').value = '';
         document.getElementById('p-deduct-advance').value = '0';
         document.getElementById('p-outstanding-adv').textContent = 'PKR 0.00';
         const defs = await Settings.getDefaults();
@@ -317,6 +407,11 @@ const Purchasing = {
     async loadForEdit(id) {
         const data = await DB.get('purchases', id);
         if (!data) return;
+        const payments = await DB.getByIndex('purchase_payments', 'purchaseId', id);
+        if (payments.length) {
+            const ok = await Utils.confirm(`This purchase has ${payments.length} linked payment(s). Editing weight, rate, deductions, or paid amount can change balances. Continue?`);
+            if (!ok) return;
+        }
         this.editingId = id;
         document.getElementById('p-id').value = data.id;
         document.getElementById('p-date').value = data.date;
@@ -325,7 +420,12 @@ const Purchasing = {
         document.getElementById('p-rate').value = data.rate;
         document.getElementById('p-payment-status').value = data.paymentStatus;
         document.getElementById('p-amount-paid').value = data.amountPaid;
+        if (document.getElementById('p-initial-account')) {
+            await Utils.populateCapitalAccountSelect('p-initial-account', 'Select cash/bank account');
+            document.getElementById('p-initial-account').value = data.initialPaymentAccountId || '';
+        }
         document.getElementById('p-notes').value = data.notes || '';
+        document.getElementById('p-due-date').value = data.dueDate || '';
         document.getElementById('p-deduct-advance').value = data.advanceDeducted || 0;
         document.getElementById('p-bardana').value = data.bardanaPerBag;
         document.getElementById('p-labour').value = data.labourPerBag;
@@ -358,7 +458,8 @@ const PurchaseList = {
     currentPage: 1,
     async render(page) {
         if (page) this.currentPage = page;
-        const all = await DB.getAll('purchases');
+        const activeSeason = await Utils.getActiveSeason();
+        const all = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
         const search = (document.getElementById('pl-search').value || '').toLowerCase();
         const cropFilter = document.getElementById('pl-crop-filter').value;
         const statusFilter = document.getElementById('pl-status-filter').value;
@@ -404,11 +505,30 @@ const PurchaseList = {
     },
 
     async delete(id) {
-        if (!await Utils.confirm('Delete this purchase receipt and its associated payments?')) return;
-        // Cascade delete purchase payments
+        const purchase = await DB.get('purchases', id);
+        if (!purchase) return;
         const payments = await DB.getByIndex('purchase_payments', 'purchaseId', id);
-        for (const p of payments) await DB.delete('purchase_payments', p.id);
+        const expenses = await DB.getByIndex('expenses', 'purchaseId', id);
+        const paymentTotal = payments.reduce((s, p) => s + (p.amount || 0), 0);
+        const expenseTotal = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+        const msg = `Delete purchase ${id}?\n\nLinked farmer payments: ${payments.length} (PKR ${Utils.formatPKR(paymentTotal)})\nLinked expenses that will be removed: ${expenses.length} (PKR ${Utils.formatPKR(expenseTotal)})\nLinked capital transactions for those payments/expenses will also be removed.`;
+        if (!await Utils.confirm(msg)) return;
+        for (const e of expenses) {
+            await Utils.deleteLinkedCapitalTx('expenses', e.id);
+            await DB.delete('expenses', e.id);
+        }
+        for (const p of payments) {
+            await Utils.deleteLinkedCapitalTx('purchase_payments', p.id);
+            await DB.delete('purchase_payments', p.id);
+        }
+        await Utils.deleteLinkedCapitalTx('purchases', id);
         await DB.delete('purchases', id);
+        await Utils.audit('delete', 'purchase', id, {
+            oldAmount: purchase.netPayableAmount || purchase.amount || 0,
+            oldRecord: purchase,
+            linkedPayments: payments,
+            linkedExpenses: expenses
+        });
         Utils.showToast('Deleted!');
         this.render();
     }
@@ -417,13 +537,16 @@ const PurchaseList = {
 // Purchase Export
 const PurchaseExport = {
     async toExcel() {
-        const all = await DB.getAll('purchases');
+        if (!Utils.requireExcel()) return;
+        const activeSeason = await Utils.getActiveSeason();
+        const all = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
         if (!all.length) { Utils.showToast('No data to export', 'warning'); return; }
         const rows = all.sort((a,b) => new Date(b.date)-new Date(a.date)).map(p => ({
             'ID': p.id, 'Date': p.date, 'Farmer': p.farmerName, 'Crop': p.crop,
             'Method': p.method, 'Gross Weight (KG)': p.grossWeight, 'Net Weight (KG)': p.netWeight,
             'Net Maund': Utils.formatNum(p.netMn,2), 'Rate/Mn': p.rate,
             'Amount': p.amount, 'PKR Deductions': p.totalPkrDeductions || 0,
+            'Cost Before Advance': Utils.purchaseCostAmount(p),
             'Net Payable': p.netPayableAmount || p.amount,
             'Paid': p.amountPaid, 'Balance': p.balance, 'Status': p.paymentStatus
         }));

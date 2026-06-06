@@ -8,7 +8,8 @@ const Capital = {
 
     async renderStats() {
         const accounts = await DB.getAll('capital_accounts');
-        const transactions = await DB.getAll('capital_transactions');
+        const activeSeason = await Utils.getActiveSeason();
+        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
         const totalInvested = accounts.reduce((s, a) => s + (a.openingBalance || 0), 0);
         let currentTotal = 0;
         accounts.forEach(a => {
@@ -27,14 +28,15 @@ const Capital = {
 
     async renderAccounts() {
         const accounts = await DB.getAll('capital_accounts');
-        const transactions = await DB.getAll('capital_transactions');
+        const activeSeason = await Utils.getActiveSeason();
+        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
         document.getElementById('capital-accounts-tbody').innerHTML = accounts.map(a => {
             const txs = transactions.filter(t => t.accountId === a.id);
             const dep = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
             const wdr = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
             const current = (a.openingBalance || 0) + dep - wdr;
             return `<tr>
-                <td class="font-bold">${a.name}</td><td>${a.type}</td>
+                <td class="font-bold">${Utils.escapeHTML(a.name)}</td><td>${Utils.escapeHTML(a.type)}</td>
                 <td class="text-right">PKR ${Utils.formatPKR(a.openingBalance)}</td>
                 <td class="text-right font-bold" style="color:${current>=0?'var(--accent-success)':'var(--accent-danger)'}">PKR ${Utils.formatPKR(current)}</td>
                 <td><button class="btn btn-icon btn-danger btn-sm" onclick="Capital.deleteAccount('${a.id}')">🗑️</button></td>
@@ -43,7 +45,8 @@ const Capital = {
     },
 
     async renderTransactions() {
-        const transactions = await DB.getAll('capital_transactions');
+        const activeSeason = await Utils.getActiveSeason();
+        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
         const accounts = await DB.getAll('capital_accounts');
         const sorted = transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
         // Compute running balance per account
@@ -55,9 +58,9 @@ const Capital = {
             else balanceMap[t.accountId] = (balanceMap[t.accountId] || 0) - t.amount;
             const runBalance = balanceMap[t.accountId] || 0;
             return `<tr>
-                <td>${Utils.formatDate(t.date)}</td><td>${acc ? acc.name : '-'}</td>
-                <td><span class="badge ${t.type==='deposit'?'badge-success':'badge-danger'}">${t.type}</span></td>
-                <td>${t.description || '-'}</td>
+                <td>${Utils.formatDate(t.date)}</td><td>${acc ? Utils.escapeHTML(acc.name) : '-'}</td>
+                <td><span class="badge ${t.type==='deposit'?'badge-success':'badge-danger'}">${Utils.escapeHTML(t.type)}</span></td>
+                <td>${Utils.escapeHTML(t.description || '-')}</td>
                 <td class="text-right font-bold" style="color:${t.type==='deposit'?'var(--accent-success)':'var(--accent-danger)'}">${t.type==='deposit'?'+':'−'}PKR ${Utils.formatPKR(t.amount)}</td>
                 <td class="text-right font-bold" style="color:${runBalance>=0?'var(--accent-success)':'var(--accent-danger)'}">PKR ${Utils.formatPKR(runBalance)}</td>
                 <td class="text-center">${t.isReconciled ? '✅' : '<span style="color:var(--text-muted);font-size:0.8rem">Pending</span>'}</td>
@@ -74,7 +77,7 @@ const Capital = {
         if (accounts.length === 0) {
             sel.innerHTML = '<option value="">(No Accounts)</option>';
         } else {
-            sel.innerHTML = accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+            sel.innerHTML = accounts.map(a => `<option value="${Utils.escapeHTML(a.id)}">${Utils.escapeHTML(a.name)}</option>`).join('');
             this.renderReconList();
         }
         Utils.showModal('recon-modal');
@@ -102,8 +105,8 @@ const Capital = {
             const checked = t.isReconciled ? 'checked' : '';
             return `<tr>
                 <td>${Utils.formatDate(t.date)}</td>
-                <td><span class="badge ${t.type==='deposit'?'badge-success':'badge-danger'}">${t.type}</span></td>
-                <td>${t.description || '-'}</td>
+                <td><span class="badge ${t.type==='deposit'?'badge-success':'badge-danger'}">${Utils.escapeHTML(t.type)}</span></td>
+                <td>${Utils.escapeHTML(t.description || '-')}</td>
                 <td class="text-right font-bold">${t.type==='deposit'?'+':'-'}PKR ${Utils.formatPKR(t.amount)}</td>
                 <td class="text-center">
                     <input type="checkbox" ${checked} onchange="Capital.toggleReconciled('${t.id}', this.checked)" style="transform: scale(1.5);">
@@ -152,7 +155,7 @@ const Capital = {
     async populateAccountSelect() {
         const accounts = await DB.getAll('capital_accounts');
         const sel = document.getElementById('tx-account');
-        sel.innerHTML = accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+        sel.innerHTML = accounts.map(a => `<option value="${Utils.escapeHTML(a.id)}">${Utils.escapeHTML(a.name)}</option>`).join('');
     },
 
     async saveTransaction() {
@@ -189,8 +192,10 @@ const Capital = {
     },
 
     async exportExcel() {
+        if (!Utils.requireExcel()) return;
         const accounts = await DB.getAll('capital_accounts');
-        const transactions = await DB.getAll('capital_transactions');
+        const activeSeason = await Utils.getActiveSeason();
+        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
         
         const wb = XLSX.utils.book_new();
         

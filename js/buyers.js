@@ -13,7 +13,9 @@ const Buyers = {
 
     async render() {
         const buyers = await DB.getAll('buyers');
-        const sales = await DB.getAll('sales');
+        const activeSeason = await Utils.getActiveSeason();
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
         const search = (document.getElementById('b-search').value || '').toLowerCase();
 
         const filtered = buyers.filter(b => !search || b.name.toLowerCase().includes(search) || (b.phone || '').includes(search));
@@ -26,9 +28,12 @@ const Buyers = {
 
         tbody.innerHTML = filtered.map(b => {
             const bs = sales.filter(s => s.buyerName.toLowerCase() === b.name.toLowerCase());
-            const totalAmt = bs.reduce((s, x) => s + (x.amount || 0), 0);
-            const totalRcvd = bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
-            const balance = totalAmt - totalRcvd;
+            const openingReceivable = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const openingReceived = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.receivedAmount || o.settledAmount || 0), 0);
+            const openingAdvance = openings.filter(o => o.type === 'buyer_advance' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
+            const totalRcvd = openingReceived + bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
+            const balance = totalAmt - totalRcvd - openingAdvance;
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(b.name, search)}</td>
                 <td>${Utils.highlightText(b.phone || '-', search)}</td>
@@ -37,10 +42,9 @@ const Buyers = {
                 <td class="text-right">PKR ${Utils.formatPKR(totalRcvd)}</td>
                 <td class="text-right font-bold" style="color:${balance > 0 ? 'var(--accent-warning)' : 'var(--accent-success)'}">PKR ${Utils.formatPKR(balance)}</td>
                 <td><div class="table-actions">
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.printLedger('${b.id}')" title="Print Ledger (PDF)">🖨️</button>
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.exportLedgerExcel('${b.id}')" title="Export Ledger (Excel)">📊</button>
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.edit('${b.id}')" title="Edit">✏️</button>
-                    <button class="btn btn-icon btn-danger btn-sm" onclick="Buyers.delete('${b.id}')" title="Delete">🗑️</button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.showLedgerOptions('${Utils.escapeHTML(b.id)}')" title="Ledger Options">📊</button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.edit('${Utils.escapeHTML(b.id)}')" title="Edit">✏️</button>
+                    <button class="btn btn-icon btn-danger btn-sm" onclick="Buyers.delete('${Utils.escapeHTML(b.id)}')" title="Delete">🗑️</button>
                 </div></td>
             </tr>`;
         }).join('');
@@ -95,21 +99,28 @@ const Buyers = {
     },
 
     async exportExcel() {
+        if (!Utils.requireExcel()) return;
         const buyers = await DB.getAll('buyers');
-        const sales = await DB.getAll('sales');
+        const activeSeason = await Utils.getActiveSeason();
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
         if (!buyers.length) { Utils.showToast('No data to export', 'warning'); return; }
 
         const rows = buyers.sort((a, b) => a.name.localeCompare(b.name)).map(b => {
             const bs = sales.filter(s => s.buyerName.toLowerCase() === b.name.toLowerCase());
-            const totalAmt = bs.reduce((s, x) => s + (x.amount || 0), 0);
-            const totalRcvd = bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
+            const openingReceivable = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const openingReceived = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.receivedAmount || o.settledAmount || 0), 0);
+            const openingAdvance = openings.filter(o => o.type === 'buyer_advance' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
+            const totalRcvd = openingReceived + bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
             return {
                 'Name': b.name,
                 'Phone': b.phone || '',
                 'Total Sales': bs.length,
                 'Total Amount': totalAmt,
                 'Total Received': totalRcvd,
-                'Balance': totalAmt - totalRcvd
+                'Opening Advance': openingAdvance,
+                'Balance': totalAmt - totalRcvd - openingAdvance
             };
         });
         const ws = XLSX.utils.json_to_sheet(rows);
@@ -119,140 +130,89 @@ const Buyers = {
         Utils.showToast('Excel exported!');
     },
 
-    async exportLedgerExcel(buyerId) {
-        const buyer = await DB.get('buyers', buyerId);
-        if (!buyer) return;
-        const allSales = await DB.getAll('sales');
-        const allPayments = await DB.getAll('sale_payments');
-        const bNameLower = buyer.name.toLowerCase();
-
-        const bs = allSales.filter(s => s.buyerName.toLowerCase() === bNameLower);
-        const payments = allPayments.filter(p => p.buyerName.toLowerCase() === bNameLower);
-
-        let transactions = [];
-
-        bs.forEach(s => {
-            const totalBill = s.amount || 0;
-            transactions.push({
-                date: new Date(s.date || s.createdAt),
-                dateStr: Utils.formatDate(s.date),
-                desc: `Sale #${s.id} - ${s.crop}`,
-                receivable: totalBill,
-                received: 0
-            });
-            const laterPayments = payments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-            const initialRcvd = (s.amountReceived || 0) - laterPayments;
-            if (initialRcvd > 0) {
-                transactions.push({
-                    date: new Date(s.date || s.createdAt),
-                    dateStr: Utils.formatDate(s.date),
-                    desc: `Advance Received for #${s.id}`,
-                    receivable: 0,
-                    received: initialRcvd
-                });
-            }
+    showLedgerOptions(buyerId) {
+        document.getElementById('ledger-filter-title').textContent = 'Buyer Ledger Options';
+        document.getElementById('ledger-from').value = '';
+        document.getElementById('ledger-to').value = '';
+        document.getElementById('ledger-include-opening').checked = true;
+        const options = () => ({
+            from: document.getElementById('ledger-from').value,
+            to: document.getElementById('ledger-to').value,
+            includeOpening: document.getElementById('ledger-include-opening').checked
         });
-
-        payments.forEach(pay => {
-            transactions.push({
-                date: new Date(pay.date || pay.createdAt),
-                dateStr: Utils.formatDate(pay.date),
-                desc: `Payment for #${pay.saleId} (${pay.mode || 'Cash'})` + (pay.reference ? ` Ref: ${pay.reference}` : ''),
-                receivable: 0,
-                received: pay.amount || 0
-            });
-        });
-
-        transactions.sort((a, b) => a.date - b.date);
-
-        let balance = 0;
-        const rows = transactions.map(t => {
-            balance += t.receivable;
-            balance -= t.received;
-            return {
-                'Date': t.dateStr,
-                'Description': t.desc,
-                'Receivable (+) (PKR)': t.receivable,
-                'Received (-) (PKR)': t.received,
-                'Balance (PKR)': balance
-            };
-        });
-
-        if (!rows.length) { Utils.showToast('No ledger transactions to export', 'warning'); return; }
-
-        const ws = XLSX.utils.json_to_sheet(rows);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
-        XLSX.writeFile(wb, `${buyer.name.replace(/\\s+/g, '_')}_Buyer_Ledger_${Utils.todayISO()}.xlsx`);
-        Utils.showToast('Buyer Ledger extracted into Excel!');
+        document.getElementById('ledger-filter-excel').onclick = async () => { Utils.hideModal('ledger-filter-modal'); await Buyers.exportLedgerExcel(buyerId, options()); };
+        document.getElementById('ledger-filter-pdf').onclick = async () => { Utils.hideModal('ledger-filter-modal'); await Buyers.printLedger(buyerId, options()); };
+        Utils.showModal('ledger-filter-modal');
     },
 
-    async printLedger(buyerId) {
+    async exportLedgerExcel(buyerId, options = {}) {
+        if (!Utils.requireExcel()) return;
+        const buyer = await DB.get('buyers', buyerId);
+        if (!buyer) return;
+        const ledger = await Utils.buildBuyerLedger(buyer, options);
+        if (!ledger.rows.length) { Utils.showToast('No ledger transactions to export', 'warning'); return; }
+
+        const wb = XLSX.utils.book_new();
+        const summary = [
+            { Field: 'Account Type', Value: 'Buyer Ledger' },
+            { Field: 'Buyer Name', Value: buyer.name },
+            { Field: 'Phone', Value: buyer.phone || '' },
+            { Field: 'Statement Date', Value: Utils.formatDate(Utils.todayISO()) },
+            { Field: 'Period', Value: `${options.from ? Utils.formatDate(options.from) : 'Start'} to ${options.to ? Utils.formatDate(options.to) : 'Today'}` },
+            { Field: 'Opening Included', Value: options.includeOpening === false ? 'No' : 'Yes' },
+            { Field: 'Sale Entries', Value: ledger.counts.sales },
+            { Field: 'Receipt Entries', Value: ledger.counts.payments },
+            { Field: 'Total Receivable (PKR)', Value: ledger.totals.debit },
+            { Field: 'Total Received (PKR)', Value: ledger.totals.credit },
+            { Field: 'Outstanding Receivable (PKR)', Value: ledger.totals.balance }
+        ];
+        const summaryWs = XLSX.utils.json_to_sheet(summary);
+        summaryWs['!cols'] = [{ wch: 30 }, { wch: 36 }];
+
+        const rows = ledger.rows.map(r => ({
+            'Date': r.date,
+            'Reference': r.ref,
+            'Type': r.type,
+            'Description': r.description,
+            'Debit / Receivable (PKR)': r.debit || '',
+            'Credit / Received (PKR)': r.credit || '',
+            'Running Balance (PKR)': r.balance
+        }));
+        rows.push({
+            'Date': '',
+            'Reference': '',
+            'Type': 'TOTALS',
+            'Description': 'Closing Balance',
+            'Debit / Receivable (PKR)': ledger.totals.debit,
+            'Credit / Received (PKR)': ledger.totals.credit,
+            'Running Balance (PKR)': ledger.totals.balance
+        });
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 46 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
+        XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
+        XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
+        XLSX.writeFile(wb, `${buyer.name.replace(/\\s+/g, '_')}_Buyer_Ledger_${Utils.todayISO()}.xlsx`);
+        Utils.showToast('Buyer ledger exported!');
+    },
+
+    async printLedger(buyerId, options = {}) {
+        if (!Utils.requirePDF()) return;
         try {
             Utils.showLoading('Generating Buyer Ledger PDF...');
             const buyer = await DB.get('buyers', buyerId);
             if (!buyer) { Utils.hideLoading(); Utils.showToast('Buyer not found', 'error'); return; }
 
             const biz = await Settings.getBusiness();
-            const allSales = await DB.getAll('sales');
-            const allPayments = await DB.getAll('sale_payments');
-
-            const bNameLower = buyer.name.toLowerCase();
-            const bs = allSales.filter(s => s.buyerName.toLowerCase() === bNameLower);
-            const payments = allPayments.filter(p => p.buyerName.toLowerCase() === bNameLower);
-
-            let transactions = [];
-
-            bs.forEach(s => {
-                const totalBill = s.amount || 0;
-                transactions.push({
-                    date: new Date(s.date || s.createdAt),
-                    dateStr: Utils.formatDate(s.date),
-                    desc: `Sale #${s.id} - ${s.crop} (${Utils.formatNum(s.netWeight, 2)} KG @ PKR ${Utils.formatPKR(s.rate)}/Mn)`,
-                    receivable: totalBill,
-                    received: 0
-                });
-                const laterPayments = payments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-                const initialRcvd = (s.amountReceived || 0) - laterPayments;
-                if (initialRcvd > 0) {
-                    transactions.push({
-                        date: new Date(s.date || s.createdAt),
-                        dateStr: Utils.formatDate(s.date),
-                        desc: `  > Advance Received for #${s.id}`,
-                        receivable: 0,
-                        received: initialRcvd
-                    });
-                }
-            });
-
-            payments.forEach(pay => {
-                transactions.push({
-                    date: new Date(pay.date || pay.createdAt),
-                    dateStr: Utils.formatDate(pay.date),
-                    desc: `Payment [${(pay.mode || 'Cash').toUpperCase()}] for #${pay.saleId}` + (pay.reference ? ` (Ref: ${pay.reference})` : ''),
-                    receivable: 0,
-                    received: pay.amount || 0
-                });
-            });
-
-            transactions.sort((a, b) => a.date - b.date);
-
-            let balance = 0;
-            let totalReceivable = 0;
-            let totalReceived = 0;
-            const tableBody = transactions.map(t => {
-                balance += t.receivable;
-                balance -= t.received;
-                totalReceivable += t.receivable;
-                totalReceived += t.received;
-                return [
-                    t.dateStr,
-                    t.desc,
-                    t.receivable > 0 ? 'PKR ' + Utils.formatPKR(t.receivable) : '',
-                    t.received > 0 ? 'PKR ' + Utils.formatPKR(t.received) : '',
-                    'PKR ' + Utils.formatPKR(balance)
-                ];
-            });
+            const ledger = await Utils.buildBuyerLedger(buyer, options);
+            const tableBody = ledger.rows.map(t => [
+                t.date,
+                t.ref || '',
+                t.type,
+                t.description,
+                t.debit > 0 ? 'PKR ' + Utils.formatPKR(t.debit) : '',
+                t.credit > 0 ? 'PKR ' + Utils.formatPKR(t.credit) : '',
+                'PKR ' + Utils.formatPKR(t.balance)
+            ]);
 
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -299,37 +259,50 @@ const Buyers = {
             doc.text(Utils.formatDate(new Date().toISOString()), 163, 50);
 
             doc.setFont('helvetica', 'bold');
-            doc.text('Total Sales:', 130, 56);
+            doc.text('Sales / Receipts:', 130, 56);
             doc.setFont('helvetica', 'normal');
-            doc.text(String(bs.length), 155, 56);
+            doc.text(`${ledger.counts.sales} / ${ledger.counts.payments}`, 166, 56);
+            doc.setFontSize(7);
+            doc.text(`Period: ${options.from ? Utils.formatDate(options.from) : 'Start'} to ${options.to ? Utils.formatDate(options.to) : 'Today'}`, 105, 64, { align: 'center' });
 
             // Ledger Table
             doc.autoTable({
-                startY: 66,
-                head: [['Date', 'Description', 'Receivable (+)', 'Received (-)', 'Balance']],
+                startY: 70,
+                margin: { top: 18, left: 15, right: 15 },
+                head: [['Date', 'Ref', 'Type', 'Description', 'Receivable (+)', 'Received (-)', 'Balance']],
                 body: tableBody,
                 foot: [[
-                    '', 'TOTALS',
-                    'PKR ' + Utils.formatPKR(totalReceivable),
-                    'PKR ' + Utils.formatPKR(totalReceived),
-                    'PKR ' + Utils.formatPKR(balance)
+                    '', '', 'TOTALS', '',
+                    'PKR ' + Utils.formatPKR(ledger.totals.debit),
+                    'PKR ' + Utils.formatPKR(ledger.totals.credit),
+                    'PKR ' + Utils.formatPKR(ledger.totals.balance)
                 ]],
                 theme: 'grid',
-                headStyles: { fillColor: [40, 40, 40], textColor: 255, fontStyle: 'bold', fontSize: 8 },
-                footStyles: { fillColor: [240, 240, 240], textColor: 0, fontStyle: 'bold', fontSize: 8 },
-                styles: { fontSize: 7.5, font: 'helvetica', textColor: 20, lineColor: 180, lineWidth: 0.15, cellPadding: 2.5 },
+                headStyles: { fillColor: [35, 35, 35], textColor: 255, fontStyle: 'bold', fontSize: 7 },
+                footStyles: { fillColor: [235, 235, 235], textColor: 0, fontStyle: 'bold', fontSize: 7 },
+                styles: { fontSize: 6.7, font: 'helvetica', textColor: 20, lineColor: 180, lineWidth: 0.12, cellPadding: 1.8 },
                 alternateRowStyles: { fillColor: [250, 250, 250] },
                 columnStyles: {
-                    0: { cellWidth: 22 },
-                    1: { cellWidth: 'auto' },
-                    2: { halign: 'right', cellWidth: 28 },
-                    3: { halign: 'right', cellWidth: 28 },
-                    4: { halign: 'right', cellWidth: 30, fontStyle: 'bold' }
+                    0: { cellWidth: 18 },
+                    1: { cellWidth: 20 },
+                    2: { cellWidth: 20 },
+                    3: { cellWidth: 'auto' },
+                    4: { halign: 'right', cellWidth: 28 },
+                    5: { halign: 'right', cellWidth: 26 },
+                    6: { halign: 'right', cellWidth: 28, fontStyle: 'bold' }
+                },
+                didDrawPage: (data) => {
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(120);
+                    doc.text(`Buyer Ledger - ${buyer.name}`, 15, 290);
+                    doc.text(`Page ${data.pageNumber}`, 195, 290, { align: 'right' });
+                    doc.setTextColor(0);
                 }
             });
 
             // Final Balance Box
             const fy = doc.lastAutoTable.finalY + 8;
+            const balance = ledger.totals.balance;
             const balText = balance > 0
                 ? `BALANCE DUE: BUYER OWES SHOP  PKR ${Utils.formatPKR(balance)}`
                 : balance < 0

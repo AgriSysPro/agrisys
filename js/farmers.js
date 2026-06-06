@@ -13,8 +13,10 @@ const Farmers = {
 
     async render() {
         const farmers = await DB.getAll('farmers');
-        const purchases = await DB.getAll('purchases');
-        const advances = await DB.getAll('farmer_advances');
+        const activeSeason = await Utils.getActiveSeason();
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason);
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
         const search = (document.getElementById('f-search').value || '').toLowerCase();
 
         const filtered = farmers.filter(f => !search || f.name.toLowerCase().includes(search) || (f.phone || '').includes(search));
@@ -27,9 +29,12 @@ const Farmers = {
 
         tbody.innerHTML = filtered.map(f => {
             const fp = purchases.filter(p => p.farmerName.toLowerCase() === f.name.toLowerCase());
-            const totalAmt = fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
-            const totalPaid = fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
-            const openAdv = advances.filter(a => a.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, a) => s + a.amount, 0);
+            const openingPayable = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const openingPaid = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.paidAmount || o.settledAmount || 0), 0);
+            const openingAdvance = openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const totalAmt = openingPayable + fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+            const totalPaid = openingPaid + fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
+            const openAdv = openingAdvance + advances.filter(a => a.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, a) => s + a.amount, 0);
             const balance = totalAmt - totalPaid;
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(f.name, search)}</td>
@@ -40,10 +45,9 @@ const Farmers = {
                 <td class="text-right font-bold" style="color:${openAdv > 0 ? 'var(--accent-warning)' : 'inherit'}">PKR ${Utils.formatPKR(openAdv)}</td>
                 <td class="text-right font-bold" style="color:${balance > 0 ? 'var(--accent-danger)' : 'var(--accent-success)'}">PKR ${Utils.formatPKR(balance)}</td>
                 <td><div class="table-actions">
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="ReceiptPDF.generateFarmerLedger('${f.id}')" title="Print Ledger (PDF)">🖨️</button>
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.exportLedgerExcel('${f.id}')" title="Export Ledger (Excel)">📊</button>
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.edit('${f.id}')" title="Edit">✏️</button>
-                    <button class="btn btn-icon btn-danger btn-sm" onclick="Farmers.delete('${f.id}')" title="Delete">🗑️</button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.showLedgerOptions('${Utils.escapeHTML(f.id)}')" title="Ledger Options">📊</button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.edit('${Utils.escapeHTML(f.id)}')" title="Edit">✏️</button>
+                    <button class="btn btn-icon btn-danger btn-sm" onclick="Farmers.delete('${Utils.escapeHTML(f.id)}')" title="Delete">🗑️</button>
                 </div></td>
             </tr>`;
         }).join('');
@@ -99,18 +103,12 @@ const Farmers = {
     },
 
     async loadAdvanceAccounts() {
-        const accounts = await DB.getAll('capital_accounts');
-        const sel = document.getElementById('adv-account');
-        if (accounts.length === 0) {
-            sel.innerHTML = '<option value="">(No Accounts Available)</option>';
-        } else {
-            sel.innerHTML = accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
-        }
+        await Utils.populateCapitalAccountSelect('adv-account', 'Select cash/bank account');
     },
 
     async loadAdvanceDatalist() {
         const farmers = await DB.getAll('farmers');
-        document.getElementById('adv-farmer-datalist').innerHTML = farmers.map(f => `<option value="${f.name}">`).join('');
+        document.getElementById('adv-farmer-datalist').innerHTML = farmers.map(f => `<option value="${Utils.escapeHTML(f.name)}">`).join('');
     },
 
     async saveAdvance() {
@@ -122,6 +120,7 @@ const Farmers = {
 
         if (!farmerName) { Utils.showToast('Select a farmer', 'error'); return; }
         if (amount <= 0) { Utils.showToast('Enter a valid amount', 'error'); return; }
+        if (!accountId) { Utils.showToast('Select cash/bank account for this advance', 'error'); return; }
 
         await this.ensureFarmer(farmerName);
 
@@ -131,14 +130,27 @@ const Farmers = {
             id: advId, farmerName, amount, date, notes, createdAt: new Date().toISOString()
         });
 
-        // Deduct from capital account if present
-        if (accountId) {
-            await DB.put('capital_transactions', {
-                id: Utils.generateId(), accountId, type: 'withdrawal', amount, date,
-                description: `Advance paid to ${farmerName}` + (notes ? ` - ${notes}` : ''),
-                createdAt: new Date().toISOString()
-            });
+        const tx = await Utils.createLinkedCapitalTx({
+            accountId,
+            type: 'withdrawal',
+            amount,
+            date,
+            description: `Advance paid to ${farmerName}` + (notes ? ` - ${notes}` : ''),
+            sourceStore: 'farmer_advances',
+            sourceId: advId
+        });
+        if (tx) {
+            const adv = await DB.get('farmer_advances', advId);
+            adv.capitalTxId = tx.id;
+            adv.accountId = accountId;
+            await DB.put('farmer_advances', adv);
         }
+        await Utils.audit('create', 'farmer_advance', advId, {
+            farmerName,
+            amount,
+            accountId: accountId || null,
+            capitalTxId: tx ? tx.id : null
+        });
 
         Utils.hideModal('advance-modal');
         Utils.showToast('Advance recorded successfully!');
@@ -165,16 +177,22 @@ const Farmers = {
     },
 
     async exportExcel() {
+        if (!Utils.requireExcel()) return;
         const farmers = await DB.getAll('farmers');
-        const purchases = await DB.getAll('purchases');
-        const advances = await DB.getAll('farmer_advances');
+        const activeSeason = await Utils.getActiveSeason();
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason);
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
         if (!farmers.length) { Utils.showToast('No data to export', 'warning'); return; }
         
         const rows = farmers.sort((a,b) => a.name.localeCompare(b.name)).map(f => {
             const fp = purchases.filter(p => p.farmerName.toLowerCase() === f.name.toLowerCase());
-            const totalAmt = fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
-            const totalPaid = fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
-            const openAdv = advances.filter(a => a.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, a) => s + a.amount, 0);
+            const openingPayable = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const openingPaid = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.paidAmount || o.settledAmount || 0), 0);
+            const openingAdvance = openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            const totalAmt = openingPayable + fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+            const totalPaid = openingPaid + fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
+            const openAdv = openingAdvance + advances.filter(a => a.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, a) => s + a.amount, 0);
             return {
                 'Name': f.name,
                 'Phone': f.phone || '',
@@ -192,71 +210,69 @@ const Farmers = {
         Utils.showToast('Excel exported!');
     },
 
-    async exportLedgerExcel(farmerId) {
+    showLedgerOptions(farmerId) {
+        document.getElementById('ledger-filter-title').textContent = 'Farmer Ledger Options';
+        document.getElementById('ledger-from').value = '';
+        document.getElementById('ledger-to').value = '';
+        document.getElementById('ledger-include-opening').checked = true;
+        const options = () => ({
+            from: document.getElementById('ledger-from').value,
+            to: document.getElementById('ledger-to').value,
+            includeOpening: document.getElementById('ledger-include-opening').checked
+        });
+        document.getElementById('ledger-filter-excel').onclick = async () => { Utils.hideModal('ledger-filter-modal'); await Farmers.exportLedgerExcel(farmerId, options()); };
+        document.getElementById('ledger-filter-pdf').onclick = async () => { Utils.hideModal('ledger-filter-modal'); await ReceiptPDF.generateFarmerLedger(farmerId, options()); };
+        Utils.showModal('ledger-filter-modal');
+    },
+
+    async exportLedgerExcel(farmerId, options = {}) {
+        if (!Utils.requireExcel()) return;
         const farmer = await DB.get('farmers', farmerId);
         if (!farmer) return;
-        const allPurchases = await DB.getAll('purchases');
-        const allPayments = await DB.getAll('purchase_payments');
-        const fNameLower = farmer.name.toLowerCase();
-        
-        const fp = allPurchases.filter(p => p.farmerName.toLowerCase() === fNameLower);
-        const payments = allPayments.filter(p => p.farmerName.toLowerCase() === fNameLower);
+        const ledger = await Utils.buildFarmerLedger(farmer, options);
+        if (!ledger.rows.length) { Utils.showToast('No ledger transactions to export', 'warning'); return; }
 
-        let transactions = [];
-
-        fp.forEach(p => {
-            const totalBill = p.netPayableAmount || p.amount || 0;
-            transactions.push({
-                date: new Date(p.date || p.createdAt),
-                dateStr: Utils.formatDate(p.date),
-                desc: `Purchase #${p.id} - ${p.crop}`,
-                payable: totalBill,
-                paid: 0
-            });
-            const laterPayments = payments.filter(pay => pay.purchaseId === p.id).reduce((s, pay) => s + (pay.amount || 0), 0);
-            const initialPaid = (p.amountPaid || 0) - laterPayments;
-            if (initialPaid > 0) {
-                transactions.push({
-                    date: new Date(p.date || p.createdAt),
-                    dateStr: Utils.formatDate(p.date),
-                    desc: `Advance Paid for #${p.id}`,
-                    payable: 0,
-                    paid: initialPaid
-                });
-            }
-        });
-
-        payments.forEach(pay => {
-            transactions.push({
-                date: new Date(pay.date || pay.createdAt),
-                dateStr: Utils.formatDate(pay.date),
-                desc: `Payment against #${pay.purchaseId} (${pay.mode || 'Cash'})` + (pay.reference ? ` Ref: ${pay.reference}` : ''),
-                payable: 0,
-                paid: pay.amount || 0
-            });
-        });
-
-        transactions.sort((a, b) => a.date - b.date);
-
-        let balance = 0;
-        const rows = transactions.map(t => {
-            balance += t.payable;
-            balance -= t.paid;
-            return {
-                'Date': t.dateStr,
-                'Description': t.desc,
-                'Payable (+) (PKR)': t.payable,
-                'Paid (-) (PKR)': t.paid,
-                'Balance (PKR)': balance
-            };
-        });
-
-        if (!rows.length) { Utils.showToast('No ledger transactions to export', 'warning'); return; }
-
-        const ws = XLSX.utils.json_to_sheet(rows);
         const wb = XLSX.utils.book_new();
+        const summary = [
+            { Field: 'Account Type', Value: 'Farmer Ledger' },
+            { Field: 'Farmer Name', Value: farmer.name },
+            { Field: 'Phone', Value: farmer.phone || '' },
+            { Field: 'Statement Date', Value: Utils.formatDate(Utils.todayISO()) },
+            { Field: 'Period', Value: `${options.from ? Utils.formatDate(options.from) : 'Start'} to ${options.to ? Utils.formatDate(options.to) : 'Today'}` },
+            { Field: 'Opening Included', Value: options.includeOpening === false ? 'No' : 'Yes' },
+            { Field: 'Purchase Entries', Value: ledger.counts.purchases },
+            { Field: 'Payment Entries', Value: ledger.counts.payments },
+            { Field: 'Total Payable (PKR)', Value: ledger.totals.credit },
+            { Field: 'Total Paid (PKR)', Value: ledger.totals.debit },
+            { Field: 'Outstanding Payable (PKR)', Value: ledger.totals.balance },
+            { Field: 'Open Advances Memo (PKR)', Value: ledger.totals.openAdvances || 0 }
+        ];
+        const summaryWs = XLSX.utils.json_to_sheet(summary);
+        summaryWs['!cols'] = [{ wch: 28 }, { wch: 36 }];
+
+        const rows = ledger.rows.map(r => ({
+            'Date': r.date,
+            'Reference': r.ref,
+            'Type': r.type,
+            'Description': r.description,
+            'Debit / Paid (PKR)': r.debit || '',
+            'Credit / Payable (PKR)': r.credit || '',
+            'Running Balance (PKR)': r.balance
+        }));
+        rows.push({
+            'Date': '',
+            'Reference': '',
+            'Type': 'TOTALS',
+            'Description': 'Closing Balance',
+            'Debit / Paid (PKR)': ledger.totals.debit,
+            'Credit / Payable (PKR)': ledger.totals.credit,
+            'Running Balance (PKR)': ledger.totals.balance
+        });
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 46 }, { wch: 18 }, { wch: 22 }, { wch: 22 }];
+        XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
         XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
         XLSX.writeFile(wb, `${farmer.name.replace(/\\s+/g, '_')}_Ledger_${Utils.todayISO()}.xlsx`);
-        Utils.showToast('Farmer Ledger Extracted into Excel!');
+        Utils.showToast('Farmer ledger exported!');
     }
 };

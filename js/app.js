@@ -22,7 +22,7 @@ const App = {
             await this.populateExpenseTypeSelect();
             this.setupHashRouter();
             this.setupKeyboardShortcuts();
-            lucide.createIcons();
+            Utils.safeCreateIcons();
 
             // Load section modules
             await Purchasing.init();
@@ -33,6 +33,14 @@ const App = {
             // Navigate to hash or dashboard
             const hash = location.hash.replace('#', '') || 'dashboard';
             this.navigate(hash);
+
+            // Season badge in sidebar
+            if (typeof SeasonManager !== 'undefined') {
+                await SeasonManager.renderSidebarBadge();
+            }
+
+            // Auto-backup check
+            await this.checkAutoBackup();
 
             console.log('AgriSys initialized successfully');
         } catch (e) {
@@ -95,7 +103,7 @@ const App = {
 
         // Trigger section load
         this.onSectionLoad(section);
-        lucide.createIcons();
+        Utils.safeCreateIcons();
     },
 
     async onSectionLoad(section) {
@@ -108,9 +116,20 @@ const App = {
             case 'sale-payments': await SalePayments.render(); break;
             case 'buyers': await Buyers.render(); break;
             case 'expenses': await Expenses.render(); break;
+            case 'opening-balances': await OpeningBalances.render(); break;
+            case 'stock-adjustments': await StockAdjustments.render(); break;
+            case 'inventory-lots': await InventoryLots.render(); break;
             case 'capital': await Capital.render(); break;
             case 'bookkeeping': await Bookkeeping.render(); break;
+            case 'cash-book': await FinanceReports.renderCashBook(); break;
+            case 'trial-balance': await FinanceReports.renderTrialBalance(); break;
+            case 'general-ledger': await FinanceReports.renderGeneralLedger(); break;
             case 'reports': break;
+            case 'aging-reports': await AgingReports.render(); break;
+            case 'settings':
+                if (typeof SeasonManager !== 'undefined') await SeasonManager.renderSettings();
+                await Settings.renderAudit();
+                break;
         }
     },
 
@@ -153,7 +172,7 @@ const App = {
 
     async populateCropSelects() {
         const crops = await Settings.getCrops();
-        const selects = ['p-crop', 's-crop', 'exp-crop'];
+        const selects = ['p-crop', 's-crop', 'exp-crop', 'ob-crop', 'sa-crop'];
         selects.forEach(id => {
             const sel = document.getElementById(id);
             if (!sel) return;
@@ -194,15 +213,33 @@ const App = {
     },
 
     async loadDashboard() {
-        const purchases = await DB.getAll('purchases');
-        const sales = await DB.getAll('sales');
-        const expenses = await DB.getAll('expenses');
+        let purchases = await DB.getAll('purchases');
+        let sales = await DB.getAll('sales');
+        let expenses = await DB.getAll('expenses');
+        let stockAdjustments = await DB.getAll('stock_adjustments');
+
+        // Apply season filter if active
+        const activeSeason = typeof SeasonManager !== 'undefined' ? await SeasonManager.getActiveSeason() : null;
+        if (activeSeason) {
+            purchases = SeasonManager.filterByActiveSeason(purchases, activeSeason);
+            sales = SeasonManager.filterByActiveSeason(sales, activeSeason);
+            expenses = SeasonManager.filterByActiveSeason(expenses, activeSeason);
+            stockAdjustments = SeasonManager.filterByActiveSeason(stockAdjustments, activeSeason);
+        } else {
+            purchases = purchases.filter(p => p.type !== 'opening_balance');
+        }
+        const adjustedStock = Utils.applyStockAdjustments(purchases, sales, stockAdjustments);
+        const stockPurchases = adjustedStock.purchases;
+        const stockSales = adjustedStock.sales;
 
         const totalPurchaseAmt = purchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
         const totalPaid = purchases.reduce((s, p) => s + (p.amountPaid || 0), 0);
         const totalSaleAmt = sales.reduce((s, p) => s + (p.amount || 0), 0);
         const totalReceived = sales.reduce((s, p) => s + (p.amountReceived || 0), 0);
         const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+        const today = Utils.todayISO();
+        const overduePurchases = purchases.filter(p => p.paymentStatus !== 'paid' && p.dueDate && p.dueDate < today);
+        const overdueSales = sales.filter(s => s.paymentStatus !== 'paid' && s.dueDate && s.dueDate < today);
 
         // Pending counts
         const pendingFarmers = purchases.filter(p => p.paymentStatus !== 'paid').length;
@@ -229,30 +266,40 @@ const App = {
                 <div class="stat-value">PKR ${Utils.formatPKR(totalSaleAmt - totalReceived)}</div>
                 <div class="stat-sub">${pendingBuyers} outstanding · Expenses: PKR ${Utils.formatPKR(totalExpenses)}</div>
             </div>
+        ` + `
+            <div class="stat-card orange">
+                <div class="stat-label">Overdue Buyers</div>
+                <div class="stat-value">${overdueSales.length}</div>
+                <div class="stat-sub">PKR ${Utils.formatPKR(overdueSales.reduce((s, x) => s + ((x.amount || 0) - (x.amountReceived || 0)), 0))}</div>
+            </div>
+            <div class="stat-card blue">
+                <div class="stat-label">Overdue Farmers</div>
+                <div class="stat-value">${overduePurchases.length}</div>
+                <div class="stat-sub">PKR ${Utils.formatPKR(overduePurchases.reduce((s, x) => s + ((x.netPayableAmount || x.amount || 0) - (x.amountPaid || 0)), 0))}</div>
+            </div>
         `;
 
         // Inventory Stock Calculation
         const stockMap = {};
-        purchases.forEach(p => {
+        stockPurchases.forEach(p => {
             if (!stockMap[p.crop]) stockMap[p.crop] = { weight: 0, bags: 0 };
             stockMap[p.crop].weight += (p.netWeight || 0);
             stockMap[p.crop].bags += (p.netBags || 0);
         });
 
-        sales.forEach(s => {
+        stockSales.forEach(s => {
             if (!stockMap[s.crop]) stockMap[s.crop] = { weight: 0, bags: 0 };
             stockMap[s.crop].weight -= (s.netWeight || 0);
-            const saleBags = s.weight ? s.weight / (s.perBagWeight || 100) : 0;
+            const saleBags = (s.netWeight || s.grossWeight || 0) / (s.perBagWeight || s.perBag || 100);
             stockMap[s.crop].bags -= saleBags;
         });
 
         const stockContainer = document.getElementById('dashboard-stock');
         let stockHtml = '';
         for (const [crop, data] of Object.entries(stockMap)) {
-            if (data.weight <= 0) continue;
             stockHtml += `
-            <div class="stat-card" style="border-left-color:var(--text-muted)">
-                <div class="stat-label">${crop}</div>
+            <div class="stat-card" style="border-left-color:${data.weight < 0 ? 'var(--accent-danger)' : 'var(--text-muted)'}">
+                <div class="stat-label">${Utils.escapeHTML(crop)}${data.weight < 0 ? ' (Oversold)' : ''}</div>
                 <div class="stat-value" style="font-size:1.4rem">${Utils.formatNum(data.weight, 2)} KG</div>
                 <div class="stat-sub">~${Utils.formatNum(data.weight / 40, 2)} Mn | ${Utils.formatNum(data.bags, 1)} Bags</div>
             </div>`;
@@ -270,8 +317,8 @@ const App = {
         const recent = [...purchases].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
         const ptbody = document.querySelector('#dashboard-recent-purchases tbody');
         ptbody.innerHTML = recent.map(p => `<tr>
-            <td>${p.id}</td><td>${Utils.formatDate(p.date)}</td><td class="font-bold">${p.farmerName}</td>
-            <td>${p.crop}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(p.netPayableAmount || p.amount)}</td>
+            <td>${Utils.escapeHTML(p.id)}</td><td>${Utils.formatDate(p.date)}</td><td class="font-bold">${Utils.escapeHTML(p.farmerName)}</td>
+            <td>${Utils.escapeHTML(p.crop)}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(p.netPayableAmount || p.amount)}</td>
             <td>${Utils.statusBadge(p.paymentStatus)}</td>
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No purchases yet</td></tr>';
 
@@ -279,8 +326,8 @@ const App = {
         const recentS = [...sales].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
         const stbody = document.querySelector('#dashboard-recent-sales tbody');
         stbody.innerHTML = recentS.map(s => `<tr>
-            <td>${s.id}</td><td>${Utils.formatDate(s.date)}</td><td class="font-bold">${s.buyerName}</td>
-            <td>${s.crop}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(s.amount)}</td>
+            <td>${Utils.escapeHTML(s.id)}</td><td>${Utils.formatDate(s.date)}</td><td class="font-bold">${Utils.escapeHTML(s.buyerName)}</td>
+            <td>${Utils.escapeHTML(s.crop)}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(s.amount)}</td>
             <td>${Utils.statusBadge(s.paymentStatus)}</td>
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No sales yet</td></tr>';
     },
@@ -308,7 +355,7 @@ const App = {
             const key = d.toISOString().slice(0, 7); // YYYY-MM
             const label = d.toLocaleString('en', { month: 'short' });
             const rev = sales.filter(s => s.date && s.date.startsWith(key)).reduce((s, x) => s + (x.amount || 0), 0);
-            const cost = purchases.filter(p => p.date && p.date.startsWith(key)).reduce((s, x) => s + (x.netPayableAmount || x.amount || 0), 0);
+            const cost = purchases.filter(p => p.date && p.date.startsWith(key)).reduce((s, x) => s + Utils.purchaseCostAmount(x), 0);
             const exp = expenses.filter(e => e.date && e.date.startsWith(key)).reduce((s, x) => s + (x.amount || 0), 0);
             months.push({ label, rev, cost, exp, profit: rev - cost - exp });
         }
@@ -324,7 +371,7 @@ const App = {
         const barWidth = barGroupWidth * 0.3;
 
         // Grid lines
-        ctx.strokeStyle = 'rgba(71,85,105,0.3)';
+        ctx.strokeStyle = 'rgba(203,213,225,0.6)';
         ctx.lineWidth = 0.5;
         for (let i = 0; i <= 4; i++) {
             const y = chartTop + (chartH / 4) * i;
@@ -333,7 +380,7 @@ const App = {
             ctx.lineTo(chartRight, y);
             ctx.stroke();
             // Labels
-            ctx.fillStyle = '#64748b';
+            ctx.fillStyle = '#475569';
             ctx.font = '10px Inter, sans-serif';
             ctx.textAlign = 'right';
             const val = maxVal - (maxVal / 4) * i;
@@ -364,7 +411,7 @@ const App = {
             ctx.fill();
 
             // Month label
-            ctx.fillStyle = '#94a3b8';
+            ctx.fillStyle = '#64748b';
             ctx.font = '11px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText(m.label, x + barWidth, chartBottom + 16);
@@ -373,14 +420,40 @@ const App = {
         // Legend
         ctx.fillStyle = '#10b981';
         ctx.fillRect(chartLeft, h - 12, 10, 10);
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = '#475569';
         ctx.font = '10px Inter, sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText('Revenue', chartLeft + 14, h - 3);
         ctx.fillStyle = '#3b82f6';
         ctx.fillRect(chartLeft + 70, h - 12, 10, 10);
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = '#475569';
         ctx.fillText('Cost', chartLeft + 84, h - 3);
+    },
+
+    async checkAutoBackup() {
+        try {
+            const lastBackup = localStorage.getItem('agrisys_last_backup_time');
+            const now = Date.now();
+            const oneDay = 24 * 60 * 60 * 1000; // 24 hours
+
+            if (lastBackup && (now - parseInt(lastBackup)) < oneDay) {
+                return; // Less than 24 hours since last backup
+            }
+
+            // Check if there's any data worth backing up
+            const pCount = await DB.count('purchases');
+            const sCount = await DB.count('sales');
+            if (pCount === 0 && sCount === 0) return; // No data
+
+            // Trigger backup after a short delay so the UI finishes loading
+            setTimeout(async () => {
+                Utils.showToast('Auto backup: Generating daily backup...');
+                await Settings.backup();
+                localStorage.setItem('agrisys_last_backup_time', Date.now().toString());
+            }, 2000);
+        } catch (e) {
+            console.warn('Auto-backup check failed:', e);
+        }
     }
 };
 

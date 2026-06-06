@@ -9,10 +9,14 @@ const ExportUtils = {
     },
 
     async allToExcel() {
+        if (!Utils.requireExcel()) return;
         Utils.showLoading('Creating full Excel backup...');
-        const purchases = await DB.getAll('purchases');
-        const sales = await DB.getAll('sales');
-        const expenses = await DB.getAll('expenses');
+        const activeSeason = await Utils.getActiveSeason();
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const expenses = Utils.filterBySeason(await DB.getAll('expenses'), activeSeason);
+        const openingBalances = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        const openingPayments = Utils.filterBySeason(await DB.getAll('opening_balance_payments'), activeSeason);
         const farmers = await DB.getAll('farmers');
         const buyers = await DB.getAll('buyers');
 
@@ -43,6 +47,24 @@ const ExportUtils = {
                 Crop: e.crop, 'Linked Receipt': e.purchaseId, Amount: e.amount
             }));
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(es), 'Expenses');
+        }
+
+        if (openingBalances.length) {
+            const obs = openingBalances.map(o => ({
+                ID: o.id, Date: o.date, Type: o.type, Party: o.partyName, Crop: o.crop,
+                Amount: o.amount, Settled: o.paidAmount || o.receivedAmount || o.settledAmount || 0,
+                Balance: Math.max(0, (o.amount || 0) - (o.paidAmount || o.receivedAmount || o.settledAmount || 0)),
+                Status: o.settlementStatus || 'pending'
+            }));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(obs), 'Opening Balances');
+        }
+
+        if (openingPayments.length) {
+            const ops = openingPayments.map(p => ({
+                ID: p.id, 'Receipt No': p.receiptNo, Date: p.date, Type: p.type, Party: p.partyName,
+                Amount: p.amount, Mode: p.mode, Reference: p.reference, 'Opening Balance ID': p.openingBalanceId
+            }));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ops), 'Opening Payments');
         }
 
         if (farmers.length) {
