@@ -85,6 +85,7 @@ const PurchasePayments = {
                 const receiptNo = document.getElementById('pay-receipt-id').value;
                 const previousBalance = currentBalance;
                 
+                const txId = Utils.generateId();
                 const payment = {
                     id: Utils.generateId(), receiptNo, purchaseId, farmerName: currentP.farmerName,
                     amount: payAmt, date: document.getElementById('pay-date').value,
@@ -94,36 +95,59 @@ const PurchasePayments = {
                     accountId: document.getElementById('pay-account').value,
                     previousBalance,
                     newBalance: previousBalance - payAmt,
+                    capitalTxId: txId,
                     createdAt: new Date().toISOString()
                 };
-                await DB.put('purchase_payments', payment);
-                await Utils.confirmReceiptId('payment', receiptNo);
-                const tx = await Utils.createLinkedCapitalTx({
-                    accountId: payment.accountId,
-                    type: 'withdrawal',
-                    amount: payAmt,
-                    date: payment.date,
-                    description: `Payment to farmer ${currentP.farmerName} for purchase #${purchaseId}`,
-                    sourceStore: 'purchase_payments',
-                    sourceId: payment.id
-                });
-                if (tx) payment.capitalTxId = tx.id;
-                if (tx) await DB.put('purchase_payments', payment);
 
                 currentP.amountPaid = (currentP.amountPaid || 0) + payAmt;
                 const total = currentP.netPayableAmount || currentP.amount || 0;
                 currentP.balance = total - currentP.amountPaid;
                 currentP.paymentStatus = currentP.amountPaid >= total ? 'paid' : 'partial';
-                await DB.put('purchases', currentP);
-                await Utils.audit('create', 'purchase_payment', payment.id, {
-                    receiptNo,
-                    purchaseId,
-                    farmerName: currentP.farmerName,
-                    amount: payAmt,
-                    previousBalance,
-                    newBalance: payment.newBalance,
-                    capitalTxId: payment.capitalTxId || null
-                });
+
+                const ops = [
+                    { storeName: 'purchase_payments', action: 'put', data: payment },
+                    {
+                        storeName: 'capital_transactions',
+                        action: 'put',
+                        data: {
+                            id: txId,
+                            accountId: payment.accountId,
+                            type: 'withdrawal',
+                            amount: payAmt,
+                            date: payment.date,
+                            description: `Payment to farmer ${currentP.farmerName} for purchase #${purchaseId}`,
+                            sourceStore: 'purchase_payments',
+                            sourceId: payment.id,
+                            isReconciled: false,
+                            createdAt: new Date().toISOString()
+                        }
+                    },
+                    { storeName: 'purchases', action: 'put', data: currentP },
+                    {
+                        storeName: 'audit_logs',
+                        action: 'put',
+                        data: {
+                            id: Utils.generateId(),
+                            date: Utils.todayISO(),
+                            action: 'create',
+                            entityType: 'purchase_payment',
+                            entityId: payment.id,
+                            details: {
+                                receiptNo,
+                                purchaseId,
+                                farmerName: currentP.farmerName,
+                                amount: payAmt,
+                                previousBalance,
+                                newBalance: payment.newBalance,
+                                capitalTxId: txId
+                            },
+                            createdAt: new Date().toISOString()
+                        }
+                    }
+                ];
+
+                await DB.commitUnitOfWork(ops);
+                await Utils.confirmReceiptId('payment', receiptNo);
 
                 Utils.hideModal('payment-modal');
                 Utils.showToast('Payment recorded!');

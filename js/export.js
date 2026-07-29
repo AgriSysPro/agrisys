@@ -1,6 +1,17 @@
 // ===== Export Utilities =====
 const ExportUtils = {
     downloadJSON(data, filename) {
+        // Calculate simple integrity checksum signature
+        const copy = { ...data };
+        delete copy._signature;
+        const str = JSON.stringify(copy);
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = ((hash << 5) - hash) + str.charCodeAt(i);
+            hash |= 0;
+        }
+        data._signature = 'AGRISYS-SIG-' + Math.abs(hash).toString(16).toUpperCase();
+
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');

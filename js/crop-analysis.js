@@ -52,35 +52,42 @@ const CropAnalysis = {
         if (!fromDate && !toDate) return records;
         return records.filter(r => {
             if (!r.date) return false;
-            if (fromDate && r.date < fromDate) return false;
-            if (toDate && r.date > toDate) return false;
+            const rDate = String(r.date).split('T')[0];
+            const fDate = fromDate ? String(fromDate).split('T')[0] : '';
+            const tDate = toDate ? String(toDate).split('T')[0] : '';
+            if (fDate && rDate < fDate) return false;
+            if (tDate && rDate > tDate) return false;
             return true;
         });
     },
 
     computeMetrics(crop, purchases, sales, expenses) {
         // Filter by crop (empty = all)
-        const fp = crop ? purchases.filter(p => p.crop === crop) : purchases;
-        const fs = crop ? sales.filter(s => s.crop === crop) : sales;
-        const fe = crop ? expenses.filter(e => e.crop === crop) : expenses;
+        const cropLower = (crop || '').trim().toLowerCase();
+        const fp = cropLower ? purchases.filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower) : purchases;
+        const fs = cropLower ? sales.filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower) : sales;
+        const fe = cropLower ? expenses.filter(e => e.crop && e.crop.trim().toLowerCase() === cropLower) : expenses;
+
+        const actualPurchases = fp.filter(p => p.type !== 'stock_adjustment' && p.type !== 'opening_stock');
+        const actualSales = fs.filter(s => s.type !== 'stock_adjustment');
 
         // Purchase metrics
-        const purchaseCount = fp.length;
+        const purchaseCount = actualPurchases.length;
         const purchaseWeight = fp.reduce((s, p) => s + (p.netWeight || 0), 0);
         const purchaseMaund = purchaseWeight / 40;
-        const purchaseAmount = fp.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
+        const purchaseAmount = actualPurchases.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
         const purchaseAvgRate = purchaseMaund > 0 ? purchaseAmount / purchaseMaund : 0;
-        const purchasePayable = fp.reduce((s, p) => s + Utils.purchasePayableAmount(p), 0);
-        const purchasePaid = fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
+        const purchasePayable = actualPurchases.reduce((s, p) => s + Utils.purchasePayableAmount(p), 0);
+        const purchasePaid = actualPurchases.reduce((s, p) => s + (p.amountPaid || 0), 0);
         const purchaseBalance = purchasePayable - purchasePaid;
 
         // Sale metrics
-        const saleCount = fs.length;
+        const saleCount = actualSales.length;
         const saleWeight = fs.reduce((s, p) => s + (p.netWeight || 0), 0);
         const saleMaund = saleWeight / 40;
-        const saleAmount = fs.reduce((s, p) => s + (p.amount || 0), 0);
+        const saleAmount = actualSales.reduce((s, p) => s + (p.amount || 0), 0);
         const saleAvgRate = saleMaund > 0 ? saleAmount / saleMaund : 0;
-        const saleReceived = fs.reduce((s, p) => s + (p.amountReceived || 0), 0);
+        const saleReceived = actualSales.reduce((s, p) => s + (p.amountReceived || 0), 0);
         const saleBalance = saleAmount - saleReceived;
 
         // Net inventory
@@ -111,18 +118,21 @@ const CropAnalysis = {
             inventoryValue += lot.inventoryValue || 0;
         });
 
+        // Commission Revenue earned on purchases
+        const totalCommission = fp.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+
         // Expenses linked to purchases are already in COGS. We only subtract unlinked expenses.
         const unlinkedExpenses = fe.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
 
-        // Net P&L
-        const netPL = saleAmount - totalCogs - unlinkedExpenses;
+        // Net P&L (Sale Revenue + Commission Revenue - COGS - Unlinked Expenses)
+        const netPL = saleAmount + totalCommission - totalCogs - unlinkedExpenses;
 
         // Remaining amount (purchase balance - sale balance)
         const remainingAmount = purchaseBalance - saleBalance;
 
         return {
             purchaseCount, purchaseWeight, purchaseMaund, purchaseAmount, purchaseAvgRate,
-            purchasePaid, purchaseBalance,
+            purchasePaid, purchaseBalance, totalCommission,
             saleCount, saleWeight, saleMaund, saleAmount, saleAvgRate,
             saleReceived, saleBalance,
             netWeight, netMaund,
@@ -278,39 +288,43 @@ const CropAnalysis = {
 
         const ctx = canvas.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
-        const rect = canvas.parentElement.getBoundingClientRect();
-        const w = rect.width || 600;
-        const h = 220;
+        const rect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : null;
+        const w = (rect && rect.width > 0) ? rect.width : (canvas.clientWidth || 600);
+        const h = 240;
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         canvas.style.width = w + 'px';
         canvas.style.height = h + 'px';
         ctx.scale(dpr, dpr);
-        ctx.clearRect(0, 0, w, h);
+
+        // Fill crisp white card background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
 
         // Determine months to display
         const months = [];
         if (fromDate && toDate) {
-            // Use the date range
             const start = new Date(fromDate + 'T00:00:00');
             const end = new Date(toDate + 'T00:00:00');
             const d = new Date(start.getFullYear(), start.getMonth(), 1);
             while (d <= end) {
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
                 months.push({
-                    key: d.toISOString().slice(0, 7),
+                    key: `${year}-${month}`,
                     label: d.toLocaleString('en', { month: 'short', year: '2-digit' })
                 });
                 d.setMonth(d.getMonth() + 1);
             }
-            // Cap at 12 months
             if (months.length > 12) months.splice(0, months.length - 12);
         } else {
-            // Default: last 6 months
             const now = new Date();
             for (let i = 5; i >= 0; i--) {
                 const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
                 months.push({
-                    key: d.toISOString().slice(0, 7),
+                    key: `${year}-${month}`,
                     label: d.toLocaleString('en', { month: 'short', year: '2-digit' })
                 });
             }
@@ -340,23 +354,23 @@ const CropAnalysis = {
         const hasData = data.some(d => d.pRate > 0 || d.sRate > 0);
         if (!hasData) {
             ctx.fillStyle = '#64748b';
-            ctx.font = '13px Inter, sans-serif';
+            ctx.font = '500 13px Inter, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('No rate data available for this period', w / 2, h / 2);
             return;
         }
 
-        const maxRate = Math.max(1, ...data.map(d => Math.max(d.pRate, d.sRate))) * 1.15;
+        const maxRate = Math.max(1, ...data.map(d => Math.max(d.pRate, d.sRate))) * 1.25;
         const chartLeft = 65;
         const chartRight = w - 25;
-        const chartTop = 25;
-        const chartBottom = h - 40;
+        const chartTop = 30;
+        const chartBottom = h - 45;
         const chartW = chartRight - chartLeft;
         const chartH = chartBottom - chartTop;
 
         // Grid lines
-        ctx.strokeStyle = 'rgba(203,213,225,0.6)';
-        ctx.lineWidth = 0.5;
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.9)';
+        ctx.lineWidth = 1;
         for (let i = 0; i <= 4; i++) {
             const y = chartTop + (chartH / 4) * i;
             ctx.beginPath();
@@ -365,108 +379,155 @@ const CropAnalysis = {
             ctx.stroke();
             // Y-axis labels
             ctx.fillStyle = '#475569';
-            ctx.font = '10px Inter, sans-serif';
+            ctx.font = '600 11px Inter, sans-serif';
             ctx.textAlign = 'right';
             const val = maxRate - (maxRate / 4) * i;
-            ctx.fillText(val >= 1000 ? (val / 1000).toFixed(1) + 'K' : val.toFixed(0), chartLeft - 8, y + 4);
+            ctx.fillText(val >= 1000 ? (val / 1000).toFixed(1) + 'K' : val.toFixed(0), chartLeft - 10, y + 4);
         }
 
         const stepX = data.length > 1 ? chartW / (data.length - 1) : chartW;
         const getX = (i) => data.length > 1 ? chartLeft + stepX * i : chartLeft + chartW / 2;
         const getY = (val) => chartBottom - (val / maxRate) * chartH;
 
-        // Helper to draw a filled line
-        const drawLine = (key, color1, color2) => {
-            const points = data.map((d, i) => ({ x: getX(i), y: getY(d[key]) }));
-            const validPoints = points.filter((_, i) => data[i][key] > 0);
+        // Helper function for drawing lines
+        const drawLine = (key, strokeColor, fillColor) => {
+            const points = data.map((d, i) => ({ x: getX(i), y: getY(d[key]), val: d[key] }));
+            const validPoints = points.filter(p => p.val > 0);
+            if (!validPoints.length) return;
 
-            if (validPoints.length === 0) return;
-
-            // Fill area
+            // Gradient Fill
             ctx.beginPath();
-            let started = false;
-            let firstX = 0, lastX = 0;
-            points.forEach((p, i) => {
-                if (data[i][key] > 0) {
-                    if (!started) { ctx.moveTo(p.x, p.y); firstX = p.x; started = true; }
-                    else ctx.lineTo(p.x, p.y);
-                    lastX = p.x;
-                }
-            });
+            let firstX = validPoints[0].x;
+            let lastX = validPoints[validPoints.length - 1].x;
+            ctx.moveTo(firstX, chartBottom);
+            validPoints.forEach((p) => ctx.lineTo(p.x, p.y));
             ctx.lineTo(lastX, chartBottom);
-            ctx.lineTo(firstX, chartBottom);
             ctx.closePath();
+
             const grad = ctx.createLinearGradient(0, chartTop, 0, chartBottom);
-            grad.addColorStop(0, color1 + '25');
-            grad.addColorStop(1, color1 + '05');
+            grad.addColorStop(0, fillColor);
+            grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
             ctx.fillStyle = grad;
             ctx.fill();
 
             // Line
             ctx.beginPath();
-            started = false;
-            points.forEach((p, i) => {
-                if (data[i][key] > 0) {
-                    if (!started) { ctx.moveTo(p.x, p.y); started = true; }
-                    else ctx.lineTo(p.x, p.y);
-                }
+            validPoints.forEach((p, i) => {
+                if (i === 0) ctx.moveTo(p.x, p.y);
+                else ctx.lineTo(p.x, p.y);
             });
-            ctx.strokeStyle = color1;
-            ctx.lineWidth = 2.5;
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = 3;
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
             ctx.stroke();
 
-            // Dots and labels
-            points.forEach((p, i) => {
-                if (data[i][key] > 0) {
-                    // Dot
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-                    ctx.fillStyle = color1;
-                    ctx.fill();
-                    ctx.beginPath();
-                    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fill();
-
-                    // Value label
-                    const val = data[i][key];
-                    ctx.fillStyle = color2;
-                    ctx.font = 'bold 9px Inter, sans-serif';
-                    ctx.textAlign = 'center';
-                    const label = val >= 1000 ? (val / 1000).toFixed(1) + 'K' : val.toFixed(0);
-                    ctx.fillText(label, p.x, p.y - 10);
-                }
+            // Data Points
+            validPoints.forEach((p) => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                ctx.fillStyle = strokeColor;
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffffff';
+                ctx.fill();
             });
         };
 
-        // Draw purchase rate line (blue)
-        drawLine('pRate', '#3b82f6', '#60a5fa');
-        // Draw sale rate line (green)
-        drawLine('sRate', '#10b981', '#34d399');
+        // Draw Purchase line (Blue)
+        drawLine('pRate', '#2563eb', 'rgba(37, 99, 235, 0.18)');
+        // Draw Sale line (Emerald Green)
+        drawLine('sRate', '#059669', 'rgba(5, 150, 105, 0.18)');
+
+        // Collision-Aware Pill Label Renderer
+        const drawPill = (text, cx, cy, isAbove, color, bgColor, borderColor) => {
+            ctx.font = 'bold 10px Inter, sans-serif';
+            const metrics = ctx.measureText(text);
+            const textW = metrics.width;
+            const padX = 7;
+            const padY = 3;
+            const boxW = textW + padX * 2;
+            const boxH = 16;
+            const boxX = cx - boxW / 2;
+            const boxY = isAbove ? cy - boxH - 4 : cy + 8;
+
+            ctx.fillStyle = bgColor;
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            if (typeof ctx.roundRect === 'function') {
+                ctx.roundRect(boxX, boxY, boxW, boxH, [4]);
+            } else {
+                ctx.rect(boxX, boxY, boxW, boxH);
+            }
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.fillText(text, cx, boxY + 11);
+        };
+
+        // Smart Label Placement per month
+        data.forEach((d, i) => {
+            const x = getX(i);
+            const pVal = d.pRate;
+            const sVal = d.sRate;
+            const pY = getY(pVal);
+            const sY = getY(sVal);
+
+            const pLabel = pVal >= 1000 ? (pVal / 1000).toFixed(1) + 'K' : pVal.toFixed(0);
+            const sLabel = sVal >= 1000 ? (sVal / 1000).toFixed(1) + 'K' : sVal.toFixed(0);
+
+            if (pVal > 0 && sVal > 0) {
+                if (Math.abs(pY - sY) < 24) {
+                    // Collision detected! Place higher rate above, lower rate below
+                    if (pVal >= sVal) {
+                        drawPill(pLabel, x, pY, true, '#1e40af', 'rgba(239, 246, 255, 0.95)', '#93c5fd');
+                        drawPill(sLabel, x, sY, false, '#065f46', 'rgba(236, 253, 245, 0.95)', '#6ee7b7');
+                    } else {
+                        drawPill(sLabel, x, sY, true, '#065f46', 'rgba(236, 253, 245, 0.95)', '#6ee7b7');
+                        drawPill(pLabel, x, pY, false, '#1e40af', 'rgba(239, 246, 255, 0.95)', '#93c5fd');
+                    }
+                } else {
+                    drawPill(pLabel, x, pY, true, '#1e40af', 'rgba(239, 246, 255, 0.95)', '#93c5fd');
+                    drawPill(sLabel, x, sY, true, '#065f46', 'rgba(236, 253, 245, 0.95)', '#6ee7b7');
+                }
+            } else if (pVal > 0) {
+                drawPill(pLabel, x, pY, true, '#1e40af', 'rgba(239, 246, 255, 0.95)', '#93c5fd');
+            } else if (sVal > 0) {
+                drawPill(sLabel, x, sY, true, '#065f46', 'rgba(236, 253, 245, 0.95)', '#6ee7b7');
+            }
+        });
 
         // X-axis labels
         data.forEach((d, i) => {
-            ctx.fillStyle = '#64748b';
-            ctx.font = '10px Inter, sans-serif';
+            ctx.fillStyle = '#334155';
+            ctx.font = '600 11px Inter, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(d.label, getX(i), chartBottom + 16);
+            ctx.fillText(d.label, getX(i), chartBottom + 18);
         });
 
         // Legend
-        const legendY = h - 8;
-        ctx.fillStyle = '#3b82f6';
-        ctx.fillRect(chartLeft, legendY - 8, 10, 8);
-        ctx.fillStyle = '#475569';
-        ctx.font = '10px Inter, sans-serif';
+        const legendY = h - 10;
+        // Purchase Legend Badge
+        ctx.fillStyle = '#2563eb';
+        ctx.beginPath();
+        ctx.arc(chartLeft + 10, legendY - 3, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1e293b';
+        ctx.font = '600 11px Inter, sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('Purchase Rate/Mn', chartLeft + 14, legendY);
+        ctx.fillText('Purchase Rate / Mn', chartLeft + 20, legendY);
 
-        ctx.fillStyle = '#10b981';
-        ctx.fillRect(chartLeft + 130, legendY - 8, 10, 8);
-        ctx.fillStyle = '#475569';
-        ctx.fillText('Sale Rate/Mn', chartLeft + 144, legendY);
+        // Sale Legend Badge
+        ctx.fillStyle = '#059669';
+        ctx.beginPath();
+        ctx.arc(chartLeft + 160, legendY - 3, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1e293b';
+        ctx.fillText('Sale Rate / Mn', chartLeft + 170, legendY);
     },
 
     async render() {
@@ -477,18 +538,40 @@ const CropAnalysis = {
         this.selectedCrop = sel.value;
         const { fromDate, toDate } = this.getDateRange();
 
-        let purchases = await DB.getAll('purchases');
-        let sales = await DB.getAll('sales');
-        let expenses = await DB.getAll('expenses');
+        let purchases, sales, expenses, stockAdjustments;
+        if (fromDate || toDate) {
+            try {
+                purchases = await DB.getByDateRange('purchases', fromDate, toDate);
+                sales = await DB.getByDateRange('sales', fromDate, toDate);
+                expenses = await DB.getByDateRange('expenses', fromDate, toDate);
+                stockAdjustments = await DB.getByDateRange('stock_adjustments', fromDate, toDate);
+            } catch (e) {
+                purchases = await DB.getAll('purchases');
+                sales = await DB.getAll('sales');
+                expenses = await DB.getAll('expenses');
+                stockAdjustments = await DB.getAll('stock_adjustments');
+            }
+        } else {
+            purchases = await DB.getAll('purchases');
+            sales = await DB.getAll('sales');
+            expenses = await DB.getAll('expenses');
+            stockAdjustments = await DB.getAll('stock_adjustments');
+        }
+
+        const adjustedStock = Utils.applyStockAdjustments(purchases, sales, stockAdjustments);
+        purchases = adjustedStock.purchases;
+        sales = adjustedStock.sales;
+
+        let rawPurchases = purchases;
+        let rawSales = sales;
+        let rawExpenses = expenses;
 
         // Apply season filter if active
         const activeSeason = typeof SeasonManager !== 'undefined' ? await SeasonManager.getActiveSeason() : null;
         if (activeSeason) {
-            purchases = SeasonManager.filterByActiveSeason(purchases, activeSeason);
-            sales = SeasonManager.filterByActiveSeason(sales, activeSeason);
-            expenses = SeasonManager.filterByActiveSeason(expenses, activeSeason);
-        } else {
-            purchases = purchases.filter(p => p.type !== 'opening_balance');
+            purchases = SeasonManager.filterByActiveSeason(rawPurchases, activeSeason);
+            sales = SeasonManager.filterByActiveSeason(rawSales, activeSeason);
+            expenses = SeasonManager.filterByActiveSeason(rawExpenses, activeSeason);
         }
 
         // Apply date range filter

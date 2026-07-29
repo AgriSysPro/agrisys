@@ -140,6 +140,17 @@ const Purchasing = {
         const netMn = netWeight / 40;
         const rate = Utils.pf(document.getElementById('p-rate').value);
         const amount = Utils.roundCurrency(netMn * rate);
+
+        const commissionRate = Utils.pf(document.getElementById('p-commission') ? document.getElementById('p-commission').value : 0);
+        const mandiTaxRate = Utils.pf(document.getElementById('p-mandi-tax') ? document.getElementById('p-mandi-tax').value : 0);
+        const commissionTotal = Utils.roundCurrency(amount * (commissionRate / 100));
+        const mandiTaxTotal = Utils.roundCurrency(amount * (mandiTaxRate / 100));
+
+        if (document.getElementById('p-commission-total')) document.getElementById('p-commission-total').textContent = 'PKR ' + Utils.formatPKR(commissionTotal);
+        if (document.getElementById('p-mandi-tax-total')) document.getElementById('p-mandi-tax-total').textContent = 'PKR ' + Utils.formatPKR(mandiTaxTotal);
+
+        totalPkrDeductions += commissionTotal + mandiTaxTotal;
+
         const advanceDeducted = Utils.pf(document.getElementById('p-deduct-advance').value);
         const payableBeforeAdvance = Math.max(0, Utils.roundCurrency(amount - totalPkrDeductions));
         const netPayableAmount = Math.max(0, Utils.roundCurrency(payableBeforeAdvance - advanceDeducted));
@@ -168,8 +179,25 @@ const Purchasing = {
         let base64 = await Utils.fileToBase64(file);
         base64 = await Utils.compressImage(base64, 800, 0.7);
         this.scaleImage = base64;
+        this.renderScaleImage(base64);
+    },
+
+    renderScaleImage(imgSrc) {
         const area = document.getElementById('scale-slip-area');
-        area.innerHTML = `<img src="${base64}" alt="Scale Slip"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); Purchasing.removeScaleImage()" style="position:absolute;top:8px;right:8px">×</button>`;
+        if (!area) return;
+        area.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = imgSrc;
+        img.alt = 'Scale Slip';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-danger btn-sm';
+        btn.style.position = 'absolute';
+        btn.style.top = '8px';
+        btn.style.right = '8px';
+        btn.textContent = '×';
+        btn.onclick = (e) => { e.stopPropagation(); Purchasing.removeScaleImage(); };
+        area.appendChild(img);
+        area.appendChild(btn);
         area.style.position = 'relative';
     },
 
@@ -202,6 +230,7 @@ const Purchasing = {
         const addDeds = this.additionalDeductions.map(d => {
             let totalKg = 0, totalPkr = 0;
             if (d.unit === 'kg') { totalKg = d.amount; totalKgDed += totalKg; }
+            else if (d.unit === 'kg_per_bag') { totalKg = d.amount * bagsCount; totalKgDed += totalKg; }
             else if (d.unit === 'bags') { totalKg = d.amount * perBagWeight; totalKgDed += totalKg; }
             else if (d.unit === 'pkr') { totalPkr = d.amount; totalPkrDed += totalPkr; }
             return { ...d, totalKg, totalPkr };
@@ -213,6 +242,12 @@ const Purchasing = {
         const rate = Utils.pf(document.getElementById('p-rate').value);
         const amount = Utils.roundCurrency(netMn * rate);
         
+        const commissionRate = Utils.pf(document.getElementById('p-commission') ? document.getElementById('p-commission').value : 0);
+        const mandiTaxRate = Utils.pf(document.getElementById('p-mandi-tax') ? document.getElementById('p-mandi-tax').value : 0);
+        const commissionTotal = Utils.roundCurrency(amount * (commissionRate / 100));
+        const mandiTaxTotal = Utils.roundCurrency(amount * (mandiTaxRate / 100));
+        totalPkrDed += commissionTotal + mandiTaxTotal;
+
         const advanceDeducted = Utils.pf(document.getElementById('p-deduct-advance').value);
         const pkrDeductionsBeforeAdvance = totalPkrDed;
         const payableBeforeAdvance = Math.max(0, Utils.roundCurrency(amount - pkrDeductionsBeforeAdvance));
@@ -228,6 +263,7 @@ const Purchasing = {
             crop: document.getElementById('p-crop').value,
             method, grossWeight, perBagWeight, bagsCount,
             bardanaPerBag, labourPerBag, bardanaTotal, labourTotal,
+            commissionRate, mandiTaxRate, commissionTotal, mandiTaxTotal,
             additionalDeductions: addDeds,
             totalKgDeductions: totalKgDed,
             totalPkrDeductions: totalPkrDed + advanceDeducted,
@@ -308,6 +344,90 @@ const Purchasing = {
         await DB.put('purchases', data);
     },
 
+    async buildUnitOfWorkOperations(data, existing) {
+        const ops = [];
+        
+        // 1. Purchase record
+        ops.push({ storeName: 'purchases', action: 'put', data });
+
+        // 2. Farmer record
+        const farmerName = (data.farmerName || '').trim();
+        if (farmerName) {
+            const farmers = await DB.getAll('farmers');
+            const f = farmers.find(x => x.name.toLowerCase() === farmerName.toLowerCase());
+            if (!f) {
+                ops.push({ storeName: 'farmers', action: 'put', data: { id: Utils.generateId(), name: farmerName, phone: '', address: '', createdAt: new Date().toISOString() } });
+            }
+        }
+
+        // 3. Farmer advances
+        const allAdv = await DB.getAll('farmer_advances');
+        const existingAdv = allAdv.filter(a => a.purchaseId === data.id);
+        existingAdv.forEach(e => ops.push({ storeName: 'farmer_advances', action: 'delete', key: e.id }));
+        if ((data.advanceDeducted || 0) > 0) {
+            ops.push({
+                storeName: 'farmer_advances',
+                action: 'put',
+                data: {
+                    id: Utils.generateId(), farmerName: data.farmerName, amount: -data.advanceDeducted,
+                    date: data.date, notes: `Deducted in Purchase #${data.id}`, purchaseId: data.id, 
+                    createdAt: new Date().toISOString()
+                }
+            });
+        }
+
+        // 4. Linked capital transactions
+        const capTxs = await DB.getAll('capital_transactions');
+        const linkedCap = capTxs.filter(t => t.sourceStore === 'purchases' && t.sourceId === data.id);
+        linkedCap.forEach(t => ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id }));
+        
+        const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+        const laterPayments = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPayments);
+        data.initialPaymentAmount = initialPaid;
+        data.initialCapitalTxId = null;
+        if (initialPaid > 0 && data.initialPaymentAccountId) {
+            const txId = Utils.generateId();
+            data.initialCapitalTxId = txId;
+            ops.push({
+                storeName: 'capital_transactions',
+                action: 'put',
+                data: {
+                    id: txId,
+                    accountId: data.initialPaymentAccountId,
+                    type: 'withdrawal',
+                    amount: initialPaid,
+                    date: data.date,
+                    description: `Initial payment to farmer ${data.farmerName} for purchase #${data.id}`,
+                    sourceStore: 'purchases',
+                    sourceId: data.id,
+                    isReconciled: false,
+                    createdAt: new Date().toISOString()
+                }
+            });
+        }
+
+        // 5. Audit log
+        ops.push({
+            storeName: 'audit_logs',
+            action: 'put',
+            data: {
+                id: Utils.generateId(),
+                date: Utils.todayISO(),
+                action: existing ? 'update' : 'create',
+                entityType: 'purchase',
+                entityId: data.id,
+                details: {
+                    oldAmount: existing ? (existing.netPayableAmount || existing.amount || 0) : null,
+                    newAmount: data.netPayableAmount || data.amount || 0
+                },
+                createdAt: new Date().toISOString()
+            }
+        });
+
+        return ops;
+    },
+
     async save() {
         const data = this.getData();
         if (!await this.validate(data)) return;
@@ -323,53 +443,25 @@ const Purchasing = {
             data.createdAt = existing.createdAt || data.createdAt;
             data.updatedAt = new Date().toISOString();
         }
-        await DB.put('purchases', data);
+
+        const ops = await this.buildUnitOfWorkOperations(data, existing);
+        await DB.commitUnitOfWork(ops);
         await Utils.confirmReceiptId('purchase', data.id);
-        await Farmers.ensureFarmer(data.farmerName);
-        await this.processAdvanceDeduction(data);
-        await this.syncInitialPaymentTx(data);
-        await Utils.audit(existing ? 'update' : 'create', 'purchase', data.id, {
-            oldAmount: existing ? (existing.netPayableAmount || existing.amount || 0) : null,
-            newAmount: data.netPayableAmount || data.amount || 0,
-            oldRecord: existing || null,
-            newRecord: data
-        });
+
         Utils.showToast('Purchase receipt saved!');
         this.clearForm();
+        if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();
         return data;
     },
 
     async saveAndPrint() {
-        const data = this.getData();
-        if (!await this.validate(data)) return;
-        const existing = await DB.get('purchases', data.id);
-        if (existing) {
-            const payments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
-            const oldAmount = existing.netPayableAmount || existing.amount || 0;
-            const newAmount = data.netPayableAmount || data.amount || 0;
-            if (payments.length && Math.abs(oldAmount - newAmount) > 0.01) {
-                const ok = await Utils.confirm(`This purchase has ${payments.length} linked payment(s). Change amount from PKR ${Utils.formatPKR(oldAmount)} to PKR ${Utils.formatPKR(newAmount)}?`);
-                if (!ok) return;
-            }
-            data.createdAt = existing.createdAt || data.createdAt;
-            data.updatedAt = new Date().toISOString();
+        const data = await this.save();
+        if (data) {
+            Utils.showToast('Receipt saved! Generating PDF...');
+            Utils.showLoading('Generating PDF...');
+            await ReceiptPDF.generatePurchase(data);
+            Utils.hideLoading();
         }
-        await DB.put('purchases', data);
-        await Utils.confirmReceiptId('purchase', data.id);
-        await Farmers.ensureFarmer(data.farmerName);
-        await this.processAdvanceDeduction(data);
-        await this.syncInitialPaymentTx(data);
-        await Utils.audit(existing ? 'update' : 'create', 'purchase', data.id, {
-            oldAmount: existing ? (existing.netPayableAmount || existing.amount || 0) : null,
-            newAmount: data.netPayableAmount || data.amount || 0,
-            oldRecord: existing || null,
-            newRecord: data
-        });
-        Utils.showToast('Receipt saved! Generating PDF...');
-        Utils.showLoading('Generating PDF...');
-        await ReceiptPDF.generatePurchase(data);
-        Utils.hideLoading();
-        this.clearForm();
     },
 
     async clearForm() {
@@ -445,8 +537,7 @@ const Purchasing = {
         this.renderDeductions();
         if (data.scaleImage) {
             this.scaleImage = data.scaleImage;
-            document.getElementById('scale-slip-area').innerHTML = `<img src="${data.scaleImage}" alt="Scale Slip"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); Purchasing.removeScaleImage()" style="position:absolute;top:8px;right:8px">×</button>`;
-            document.getElementById('scale-slip-area').style.position = 'relative';
+            this.renderScaleImage(data.scaleImage);
         }
         this.calculate();
         App.navigate('purchasing');
@@ -531,6 +622,7 @@ const PurchaseList = {
         });
         Utils.showToast('Deleted!');
         this.render();
+        if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();
     }
 };
 

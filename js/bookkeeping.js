@@ -94,9 +94,13 @@ const Bookkeeping = {
 
         // ── Purchase entries (Double-entry) ──
         purchases.forEach(p => {
-            const inventoryCost = Utils.purchaseCostAmount(p);
+            const inventoryCost = p.amount || Utils.purchaseCostAmount(p);
             const payable = Utils.purchasePayableAmount(p);
-            const advanceRecovered = p.advanceDeducted || Math.max(0, inventoryCost - payable);
+            const advanceRecovered = p.advanceDeducted || 0;
+            const comm = p.commissionTotal || 0;
+            const tax = p.mandiTaxTotal || 0;
+            const otherDeds = Math.max(0, (p.pkrDeductionsBeforeAdvance || 0) - comm - tax);
+
             entries.push({ date: p.date, description: `Purchase: ${p.farmerName} - ${p.crop} (#${p.id})`, account: 'Inventory / Purchases', debit: inventoryCost, credit: 0, type: 'purchase' });
             if (payable > 0) {
                 entries.push({ date: p.date, description: `Purchase payable: ${p.farmerName} - ${p.crop} (#${p.id})`, account: 'Accounts Payable (Farmer)', debit: 0, credit: payable, type: 'purchase' });
@@ -104,8 +108,17 @@ const Bookkeeping = {
             if (advanceRecovered > 0) {
                 entries.push({ date: p.date, description: `Advance recovered from purchase #${p.id}`, account: 'Advances to Farmers', debit: 0, credit: advanceRecovered, type: 'advance' });
             }
+            if (comm > 0) {
+                entries.push({ date: p.date, description: `Commission earned from purchase #${p.id}`, account: 'Commission Revenue', debit: 0, credit: comm, type: 'commission' });
+            }
+            if (tax > 0) {
+                entries.push({ date: p.date, description: `Mandi Tax payable for purchase #${p.id}`, account: 'Mandi Tax Payable', debit: 0, credit: tax, type: 'tax' });
+            }
+            if (otherDeds > 0) {
+                entries.push({ date: p.date, description: `Other deductions for purchase #${p.id}`, account: 'Other Income', debit: 0, credit: otherDeds, type: 'deduction' });
+            }
             const laterPayments = pPayments.filter(pay => pay.purchaseId === p.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-            const initialPaid = Math.max(0, (p.amountPaid || 0) - laterPayments);
+            const initialPaid = p.initialPaymentAmount !== undefined ? p.initialPaymentAmount : Math.max(0, (p.amountPaid || 0) - laterPayments);
             if (initialPaid > 0) {
                 entries.push({ date: p.date, description: `Initial payment to: ${p.farmerName} (#${p.id})`, account: 'Accounts Payable (Farmer)', debit: initialPaid, credit: 0, type: 'payment' });
                 entries.push({ date: p.date, description: `Initial payment to: ${p.farmerName} (#${p.id})`, account: 'Cash / Bank', debit: 0, credit: initialPaid, type: 'payment' });
@@ -133,7 +146,7 @@ const Bookkeeping = {
             }
 
             const laterReceipts = sPayments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-            const initialReceived = Math.max(0, (s.amountReceived || 0) - laterReceipts);
+            const initialReceived = s.initialReceiptAmount !== undefined ? s.initialReceiptAmount : Math.max(0, (s.amountReceived || 0) - laterReceipts);
             if (initialReceived > 0) {
                 entries.push({ date: s.date, description: `Initial receipt from: ${s.buyerName} (#${s.id})`, account: 'Cash / Bank', debit: initialReceived, credit: 0, type: 'receipt' });
                 entries.push({ date: s.date, description: `Initial receipt from: ${s.buyerName} (#${s.id})`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: initialReceived, type: 'receipt' });
@@ -173,6 +186,19 @@ const Bookkeeping = {
             const accountName = e.purchaseId ? 'Inventory / Purchases' : 'Operating Expenses';
             entries.push({ date: e.date, description: desc, account: accountName, debit: e.amount, credit: 0, type: 'expense' });
             entries.push({ date: e.date, description: desc, account: 'Cash / Bank', debit: 0, credit: e.amount, type: 'expense' });
+        });
+
+        // ── Stock Adjustment entries ──
+        const stockAdjustments = Utils.filterBySeason(await DB.getAll('stock_adjustments'), activeSeason);
+        stockAdjustments.filter(a => a.direction !== 'opening').forEach(a => {
+            const adjVal = a.value || 0;
+            if (a.direction === 'decrease') {
+                entries.push({ date: a.date, description: `Stock shortage/loss: ${a.crop} (${a.weight} KG) - ${a.reason || 'Shortage'}`, account: 'Stock Shortage Loss', debit: adjVal, credit: 0, type: 'stock_adjustment' });
+                entries.push({ date: a.date, description: `Stock shortage/loss: ${a.crop} (${a.weight} KG) - ${a.reason || 'Shortage'}`, account: 'Inventory / Purchases', debit: 0, credit: adjVal, type: 'stock_adjustment' });
+            } else if (a.direction === 'increase') {
+                entries.push({ date: a.date, description: `Stock surplus gain: ${a.crop} (${a.weight} KG) - ${a.reason || 'Surplus'}`, account: 'Inventory / Purchases', debit: adjVal, credit: 0, type: 'stock_adjustment' });
+                entries.push({ date: a.date, description: `Stock surplus gain: ${a.crop} (${a.weight} KG) - ${a.reason || 'Surplus'}`, account: 'Stock Adjustment Gain', debit: 0, credit: adjVal, type: 'stock_adjustment' });
+            }
         });
 
         // ── Manual Journal Entries ──

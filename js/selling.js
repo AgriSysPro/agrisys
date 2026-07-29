@@ -76,8 +76,26 @@ const Selling = {
         let base64 = await Utils.fileToBase64(file);
         base64 = await Utils.compressImage(base64, 800, 0.7);
         this.receiptImage = base64;
-        document.getElementById('s-receipt-area').innerHTML = `<img src="${base64}" alt="Receipt"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();Selling.removeImage()" style="position:absolute;top:8px;right:8px">×</button>`;
-        document.getElementById('s-receipt-area').style.position = 'relative';
+        this.renderReceiptImage(base64);
+    },
+
+    renderReceiptImage(imgSrc) {
+        const area = document.getElementById('s-receipt-area');
+        if (!area) return;
+        area.innerHTML = '';
+        const img = document.createElement('img');
+        img.src = imgSrc;
+        img.alt = 'Receipt';
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-danger btn-sm';
+        btn.style.position = 'absolute';
+        btn.style.top = '8px';
+        btn.style.right = '8px';
+        btn.textContent = '×';
+        btn.onclick = (e) => { e.stopPropagation(); Selling.removeImage(); };
+        area.appendChild(img);
+        area.appendChild(btn);
+        area.style.position = 'relative';
     },
 
     removeImage() {
@@ -147,13 +165,83 @@ const Selling = {
         sales = adjusted.sales;
         sales = sales.filter(s => s.id !== excludeSaleId);
 
+        const cropLower = (crop || '').trim().toLowerCase();
         const purchased = purchases
-            .filter(p => p.crop === crop)
+            .filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower)
             .reduce((sum, p) => sum + (p.netWeight || 0), 0);
         const sold = sales
-            .filter(s => s.crop === crop)
+            .filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower)
             .reduce((sum, s) => sum + (s.netWeight || 0), 0);
         return purchased - sold;
+    },
+
+    async buildUnitOfWorkOperations(d, existing) {
+        const ops = [];
+
+        // 1. Linked capital transactions cleanup
+        const capTxs = await DB.getAll('capital_transactions');
+        const linkedCap = capTxs.filter(t => t.sourceStore === 'sales' && t.sourceId === d.id);
+        linkedCap.forEach(t => ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id }));
+
+        const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', d.id);
+        const laterReceived = linkedReceipts.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const initialReceived = Math.max(0, (d.amountReceived || 0) - laterReceived);
+        d.initialReceiptAmount = initialReceived;
+        d.initialCapitalTxId = null;
+
+        if (initialReceived > 0 && d.initialReceiptAccountId) {
+            const txId = Utils.generateId();
+            d.initialCapitalTxId = txId;
+            ops.push({
+                storeName: 'capital_transactions',
+                action: 'put',
+                data: {
+                    id: txId,
+                    accountId: d.initialReceiptAccountId,
+                    type: 'deposit',
+                    amount: initialReceived,
+                    date: d.date,
+                    description: `Initial receipt from buyer ${d.buyerName} for sale #${d.id}`,
+                    sourceStore: 'sales',
+                    sourceId: d.id,
+                    isReconciled: false,
+                    createdAt: new Date().toISOString()
+                }
+            });
+        }
+
+        // 2. Sale record
+        ops.push({ storeName: 'sales', action: 'put', data: d });
+
+        // 3. Buyer record
+        const buyerName = (d.buyerName || '').trim();
+        if (buyerName) {
+            const buyers = await DB.getAll('buyers');
+            const b = buyers.find(x => x.name.toLowerCase() === buyerName.toLowerCase());
+            if (!b) {
+                ops.push({ storeName: 'buyers', action: 'put', data: { id: Utils.generateId(), name: buyerName, phone: '', address: '', createdAt: new Date().toISOString() } });
+            }
+        }
+
+        // 4. Audit log
+        ops.push({
+            storeName: 'audit_logs',
+            action: 'put',
+            data: {
+                id: Utils.generateId(),
+                date: Utils.todayISO(),
+                action: existing ? 'update' : 'create',
+                entityType: 'sale',
+                entityId: d.id,
+                details: {
+                    oldAmount: existing ? (existing.amount || 0) : null,
+                    newAmount: d.amount || 0
+                },
+                createdAt: new Date().toISOString()
+            }
+        });
+
+        return ops;
     },
 
     async save() {
@@ -185,18 +273,14 @@ const Selling = {
             d.createdAt = existing.createdAt || d.createdAt;
             d.updatedAt = new Date().toISOString();
         }
-        await DB.put('sales', d);
+
+        const ops = await this.buildUnitOfWorkOperations(d, existing);
+        await DB.commitUnitOfWork(ops);
         await Utils.confirmReceiptId('sale', d.id);
-        await Buyers.ensureBuyer(d.buyerName);
-        await this.syncInitialReceiptTx(d);
-        await Utils.audit(existing ? 'update' : 'create', 'sale', d.id, {
-            oldAmount: existing ? (existing.amount || 0) : null,
-            newAmount: d.amount || 0,
-            oldRecord: existing || null,
-            newRecord: d
-        });
+
         Utils.showToast('Sale receipt saved!');
         this.clearForm();
+        if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();
         return d;
     },
 
@@ -261,8 +345,7 @@ const Selling = {
         this.renderDeductions();
         if (data.receiptImage) {
             this.receiptImage = data.receiptImage;
-            document.getElementById('s-receipt-area').innerHTML = `<img src="${data.receiptImage}" alt="Receipt"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();Selling.removeImage()" style="position:absolute;top:8px;right:8px">×</button>`;
-            document.getElementById('s-receipt-area').style.position = 'relative';
+            this.renderReceiptImage(data.receiptImage);
         }
         this.calculate();
         App.navigate('selling');
@@ -321,6 +404,7 @@ const SaleList = {
         });
         Utils.showToast('Deleted!');
         this.render();
+        if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();
     },
     goToPage(page) { this.currentPage = page; this.render(); }
 };

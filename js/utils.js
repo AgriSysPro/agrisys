@@ -99,10 +99,13 @@ const Utils = {
         return parseFloat(num).toFixed(decimals);
     },
 
-    // Round to 2 decimal places returning a number to fix floating point issues
+    // Round to 2 decimal places using scaled integer math (Paisas) to prevent floating point drift
     roundCurrency(num) {
         if (num === null || num === undefined || isNaN(num)) return 0;
-        return Math.round((parseFloat(num) + Number.EPSILON) * 100) / 100;
+        const parsed = parseFloat(num);
+        if (isNaN(parsed)) return 0;
+        const paisas = Math.round((parsed + Number.EPSILON) * 100);
+        return paisas / 100;
     },
 
     // Format date to local format
@@ -146,13 +149,6 @@ const Utils = {
         toast.appendChild(close);
         container.appendChild(toast);
         setTimeout(() => { if (toast.parentElement) toast.remove(); }, 4000);
-        return;
-        toast.innerHTML = `
-            <span>${message}</span>
-            <button class="toast-close" onclick="this.parentElement.remove()">×</button>
-        `;
-        container.appendChild(toast);
-        setTimeout(() => { if (toast.parentElement) toast.remove(); }, 4000);
     },
 
     // Show modal
@@ -181,14 +177,27 @@ const Utils = {
     async audit(action, entityType, entityId, details = {}) {
         if (!DB.db) return;
         try {
+            const id = this.generateId();
+            const date = this.todayISO();
+            const createdAt = new Date().toISOString();
+            const payload = JSON.stringify({ id, date, action, entityType, entityId, details, createdAt });
+            
+            // Simple hash digest for audit integrity
+            let hash = 0;
+            for (let i = 0; i < payload.length; i++) {
+                hash = ((hash << 5) - hash) + payload.charCodeAt(i);
+                hash |= 0;
+            }
+
             await DB.put('audit_logs', {
-                id: this.generateId(),
-                date: this.todayISO(),
+                id,
+                date,
                 action,
                 entityType,
                 entityId,
                 details,
-                createdAt: new Date().toISOString()
+                hash: hash.toString(16),
+                createdAt
             });
         } catch (e) {
             console.warn('Audit log failed:', e);
@@ -335,9 +344,11 @@ const Utils = {
     },
 
     applyStockAdjustments(purchases, sales, adjustments) {
+        const cleanPurchases = (purchases || []).filter(p => p.type !== 'stock_adjustment' && p.type !== 'opening_stock');
+        const cleanSales = (sales || []).filter(s => s.type !== 'stock_adjustment');
         const virtualPurchases = [];
         const virtualSales = [];
-        adjustments.forEach(a => {
+        (adjustments || []).forEach(a => {
             const weight = this.pf(a.weight);
             if (!a.crop || weight <= 0) return;
             const amount = this.pf(a.value);
@@ -387,8 +398,8 @@ const Utils = {
             }
         });
         return {
-            purchases: purchases.concat(virtualPurchases),
-            sales: sales.concat(virtualSales)
+            purchases: cleanPurchases.concat(virtualPurchases),
+            sales: cleanSales.concat(virtualSales)
         };
     },
 
@@ -681,15 +692,25 @@ const Utils = {
             if (e.purchaseId) expenseByPurchase[e.purchaseId] = (expenseByPurchase[e.purchaseId] || 0) + (e.amount || 0);
         });
 
-        const lotsByCrop = {};
+        const cropNameMap = {};
+        const getCropKey = (cropName) => {
+            if (!cropName) return null;
+            const trimmed = cropName.trim();
+            const lower = trimmed.toLowerCase();
+            if (!cropNameMap[lower]) cropNameMap[lower] = trimmed;
+            return lower;
+        };
+
+        const lotsByCropKey = {};
         purchases
             .slice()
             .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0))
             .forEach(p => {
                 if (!p.crop || (p.netWeight || 0) <= 0) return;
-                const cost = this.purchaseCostAmount(p) + (expenseByPurchase[p.id] || 0);
-                if (!lotsByCrop[p.crop]) lotsByCrop[p.crop] = [];
-                lotsByCrop[p.crop].push({
+                const key = getCropKey(p.crop);
+                const cost = (p.amount || this.purchaseCostAmount(p)) + (expenseByPurchase[p.id] || 0);
+                if (!lotsByCropKey[key]) lotsByCropKey[key] = [];
+                lotsByCropKey[key].push({
                     remainingWeight: p.netWeight || 0,
                     costPerKg: cost / (p.netWeight || 1)
                 });
@@ -701,29 +722,41 @@ const Utils = {
             .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0))
             .forEach(s => {
                 if (!s.crop) return;
-                if (!result[s.crop]) result[s.crop] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
+                const key = getCropKey(s.crop);
+                const cropName = cropNameMap[key] || s.crop.trim();
+                if (!result[cropName]) result[cropName] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
                 let remainingToSell = s.netWeight || 0;
                 let saleCogs = 0;
-                result[s.crop].soldWeight += remainingToSell;
-                result[s.crop].revenue += s.amount || 0;
-                const lots = lotsByCrop[s.crop] || [];
+                result[cropName].soldWeight += remainingToSell;
+                result[cropName].revenue += s.amount || 0;
+                const lots = lotsByCropKey[key] || [];
                 for (const lot of lots) {
                     if (remainingToSell <= 0) break;
                     const used = Math.min(lot.remainingWeight, remainingToSell);
                     const usedCost = used * lot.costPerKg;
-                    result[s.crop].cogs += usedCost;
+                    result[cropName].cogs += usedCost;
                     saleCogs += usedCost;
                     lot.remainingWeight -= used;
                     remainingToSell -= used;
                 }
-                result[s.crop].saleCogs[s.id] = saleCogs;
-                if (remainingToSell > 0) result[s.crop].oversoldWeight += remainingToSell;
+                if (remainingToSell > 0) {
+                    result[cropName].oversoldWeight += remainingToSell;
+                    const cropLots = lotsByCropKey[key] || [];
+                    const avgCostPerKg = cropLots.length > 0
+                        ? cropLots.reduce((sum, l) => sum + l.costPerKg, 0) / cropLots.length
+                        : (s.netWeight > 0 ? (s.amount / s.netWeight) * 0.85 : 0);
+                    const estimatedCost = remainingToSell * avgCostPerKg;
+                    result[cropName].cogs += estimatedCost;
+                    saleCogs += estimatedCost;
+                }
+                result[cropName].saleCogs[s.id] = saleCogs;
             });
 
-        Object.entries(lotsByCrop).forEach(([crop, lots]) => {
-            if (!result[crop]) result[crop] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
-            result[crop].inventoryWeight = lots.reduce((sum, lot) => sum + lot.remainingWeight, 0);
-            result[crop].inventoryValue = lots.reduce((sum, lot) => sum + (lot.remainingWeight * lot.costPerKg), 0);
+        Object.entries(lotsByCropKey).forEach(([key, lots]) => {
+            const cropName = cropNameMap[key] || key;
+            if (!result[cropName]) result[cropName] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
+            result[cropName].inventoryWeight = lots.reduce((sum, lot) => sum + lot.remainingWeight, 0);
+            result[cropName].inventoryValue = lots.reduce((sum, lot) => sum + (lot.remainingWeight * lot.costPerKg), 0);
         });
 
         return result;

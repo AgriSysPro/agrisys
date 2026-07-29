@@ -257,32 +257,177 @@ const OpeningBalances = {
 };
 
 const StockAdjustments = {
+    async syncAll() {
+        await this.render();
+        if (typeof InventoryLots !== 'undefined' && typeof InventoryLots.render === 'function') {
+            await InventoryLots.render();
+        }
+        if (typeof App !== 'undefined' && typeof App.loadDashboard === 'function') {
+            await App.loadDashboard();
+        }
+        if (typeof CropAnalysis !== 'undefined' && typeof CropAnalysis.render === 'function') {
+            await CropAnalysis.render();
+        }
+        if (typeof Selling !== 'undefined' && typeof Selling.populateCropSelect === 'function') {
+            await Selling.populateCropSelect();
+        }
+        if (typeof Bookkeeping !== 'undefined' && typeof Bookkeeping.render === 'function') {
+            await Bookkeeping.render();
+        }
+    },
+
     async render() {
         const activeSeason = await Utils.getActiveSeason();
-        const rows = Utils.filterBySeason(await DB.getAll('stock_adjustments'), activeSeason)
-            .sort((a, b) => new Date(b.date) - new Date(a.date));
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const adjustments = Utils.filterBySeason(await DB.getAll('stock_adjustments'), activeSeason);
+
+        const adjustedStock = Utils.applyStockAdjustments(purchases, sales, adjustments);
+        const adjPurchases = adjustedStock.purchases;
+        const adjSales = adjustedStock.sales;
+
+        // Collect all unique crops with case-insensitive grouping
+        const cropMap = {};
+        const getCropName = (rawName) => {
+            if (!rawName) return null;
+            const trimmed = rawName.trim();
+            const lower = trimmed.toLowerCase();
+            const existing = Object.keys(cropMap).find(k => k.toLowerCase() === lower);
+            if (!existing) cropMap[trimmed] = trimmed;
+            return existing || trimmed;
+        };
+
+        [...purchases, ...sales, ...adjustments].forEach(x => {
+            if (x.crop) getCropName(x.crop);
+        });
+        const crops = Object.values(cropMap).sort();
+
+        // Render live stock summary cards
+        const summaryContainer = document.getElementById('stock-adj-live-summary');
+        if (summaryContainer) {
+            if (crops.length === 0) {
+                summaryContainer.innerHTML = `<div class="crop-empty-state" style="grid-column:1/-1;padding:16px"><p style="margin:0;color:var(--text-muted)">No active inventory recorded yet. Add purchases or stock adjustments to view current stock.</p></div>`;
+            } else {
+                summaryContainer.innerHTML = crops.map(crop => {
+                    const cropLower = crop.toLowerCase();
+                    const cPurchases = adjPurchases.filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower);
+                    const cSales = adjSales.filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower);
+                    const cAdjs = adjustments.filter(a => a.crop && a.crop.trim().toLowerCase() === cropLower);
+
+                    const pWeight = cPurchases.reduce((s, p) => s + (p.netWeight || 0), 0);
+                    const sWeight = cSales.reduce((s, s1) => s + (s1.netWeight || 0), 0);
+                    const netStock = pWeight - sWeight;
+                    const netBags = netStock / 100;
+                    const netMaunds = netStock / 40;
+
+                    const totalDec = cAdjs.filter(a => a.direction === 'decrease').reduce((s, a) => s + (a.weight || 0), 0);
+                    const totalInc = cAdjs.filter(a => a.direction === 'increase').reduce((s, a) => s + (a.weight || 0), 0);
+
+                    return `
+                        <div class="stat-card ${netStock > 0 ? 'green' : 'orange'}">
+                            <div class="stat-label" style="display:flex;justify-content:space-between;align-items:center;">
+                                <span class="font-bold" style="font-size:1.1rem;color:var(--text-primary);">${Utils.escapeHTML(crop)}</span>
+                                <span class="badge ${netStock > 0 ? 'badge-success' : 'badge-warning'}">${Utils.formatNum(netStock, 2)} KG</span>
+                            </div>
+                            <div class="stat-value" style="font-size:1.3rem;margin:8px 0;">
+                                ${Utils.formatNum(netMaunds, 2)} Maunds <span style="font-size:0.85rem;color:var(--text-muted);font-weight:normal;">(~${Utils.formatNum(netBags, 1)} Bags)</span>
+                            </div>
+                            <div class="stat-sub" style="display:flex;gap:12px;font-size:0.75rem;border-top:1px solid var(--border-color);padding-top:6px;margin-top:6px;">
+                                <span>Purchased: ${Utils.formatNum(pWeight, 0)} KG</span>
+                                <span>Sold: ${Utils.formatNum(sWeight, 0)} KG</span>
+                                ${totalDec > 0 ? `<span style="color:var(--accent-danger)">Loss/Shortage: -${Utils.formatNum(totalDec, 0)} KG</span>` : ''}
+                                ${totalInc > 0 ? `<span style="color:var(--accent-success)">Surplus: +${Utils.formatNum(totalInc, 0)} KG</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        // Render history table
+        const rows = adjustments.sort((a, b) => new Date(b.date) - new Date(a.date));
         document.getElementById('stock-adj-tbody').innerHTML = rows.map(a => `<tr>
             <td>${Utils.formatDate(a.date)}</td>
             <td class="font-bold">${Utils.escapeHTML(a.crop)}</td>
-            <td><span class="badge ${a.direction === 'decrease' ? 'badge-danger' : 'badge-success'}">${Utils.escapeHTML(a.direction)}</span></td>
+            <td><span class="badge ${a.direction === 'decrease' ? 'badge-danger' : 'badge-success'}">${Utils.escapeHTML(a.direction.toUpperCase())}</span></td>
             <td>${Utils.escapeHTML(a.reason || '-')}</td>
-            <td class="text-right">${Utils.formatNum(a.weight, 2)} KG</td>
+            <td class="text-right font-bold">${Utils.formatNum(a.weight, 2)} KG</td>
             <td class="text-right">PKR ${Utils.formatPKR(a.value || 0)}</td>
             <td><button class="btn btn-icon btn-danger btn-sm" onclick="StockAdjustments.delete('${a.id}')" title="Delete">×</button></td>
-        </tr>`).join('') || '<tr><td colspan="7" class="text-center" style="color:var(--text-muted)">No stock adjustments</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="7" class="text-center" style="color:var(--text-muted)">No stock adjustments recorded</td></tr>';
     },
 
-    showModal() {
+    async showModal() {
         document.getElementById('sa-date').value = Utils.todayISO();
-        document.getElementById('sa-crop').innerHTML = document.getElementById('ob-crop').innerHTML || '<option value="">Select Crop</option>';
-        if (document.getElementById('sa-crop').options.length <= 1) OpeningBalances.populateCropSelect();
-        document.getElementById('sa-crop').innerHTML = document.getElementById('ob-crop').innerHTML;
+        
+        // Populate crop select from purchases and sales
+        const purchases = await DB.getAll('purchases');
+        const sales = await DB.getAll('sales');
+        const adjs = await DB.getAll('stock_adjustments');
+        const crops = [...new Set([...purchases.map(p => p.crop), ...sales.map(s => s.crop), ...adjs.map(a => a.crop)].filter(Boolean))].sort();
+
+        const saCropSelect = document.getElementById('sa-crop');
+        saCropSelect.innerHTML = `<option value="">Select Crop</option>` + crops.map(c => `<option value="${Utils.escapeHTML(c)}">${Utils.escapeHTML(c)}</option>`).join('');
+
         document.getElementById('sa-direction').value = 'decrease';
         document.getElementById('sa-reason').value = 'Shortage';
         document.getElementById('sa-weight').value = '';
         document.getElementById('sa-value').value = '0';
         document.getElementById('sa-notes').value = '';
+        
+        await this.updateStockBadge();
         Utils.showModal('stock-adjustment-modal');
+    },
+
+    async updateStockBadge() {
+        const crop = document.getElementById('sa-crop').value;
+        const direction = document.getElementById('sa-direction').value;
+        const badge = document.getElementById('sa-stock-info-badge');
+        if (!badge) return;
+
+        if (!crop) {
+            badge.style.display = 'none';
+            badge.innerHTML = '';
+            return;
+        }
+
+        const activeSeason = await Utils.getActiveSeason();
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const adjustments = Utils.filterBySeason(await DB.getAll('stock_adjustments'), activeSeason);
+
+        const adjustedStock = Utils.applyStockAdjustments(purchases, sales, adjustments);
+        const cropLower = crop.trim().toLowerCase();
+        const cPurchases = adjustedStock.purchases.filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower);
+        const cSales = adjustedStock.sales.filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower);
+
+        const pWeight = cPurchases.reduce((s, p) => s + (p.netWeight || 0), 0);
+        const sWeight = cSales.reduce((s, s1) => s + (s1.netWeight || 0), 0);
+        const availableKg = pWeight - sWeight;
+        const availableMn = availableKg / 40;
+        const availableBags = availableKg / 100;
+
+        let guideText = '';
+        if (direction === 'decrease') {
+            guideText = `Decreasing stock records shortage, moisture loss, or damage (inventory loss).`;
+        } else if (direction === 'increase') {
+            guideText = `Increasing stock adds surplus or found inventory to stock.`;
+        } else {
+            guideText = `Opening stock initializes baseline inventory for this crop.`;
+        }
+
+        badge.style.display = 'block';
+        badge.innerHTML = `
+            <div class="summary-box" style="padding:10px;background:var(--bg-card);border:1px solid var(--border-color);border-radius:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="font-weight:bold;color:var(--accent-primary);">Current Available Stock:</span>
+                    <span class="badge ${availableKg > 0 ? 'badge-success' : 'badge-warning'}">
+                        ${Utils.formatNum(availableKg, 2)} KG (${Utils.formatNum(availableMn, 2)} Mn | ~${Utils.formatNum(availableBags, 1)} Bags)
+                    </span>
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-muted);">${guideText}</div>
+            </div>
+        `;
     },
 
     async save() {
@@ -298,12 +443,13 @@ const StockAdjustments = {
             createdAt: new Date().toISOString()
         };
         if (!data.crop) { Utils.showToast('Crop is required', 'error'); return; }
-        if (data.weight <= 0) { Utils.showToast('Weight is required', 'error'); return; }
+        if (data.weight <= 0) { Utils.showToast('Adjustment weight is required', 'error'); return; }
+
         await DB.put('stock_adjustments', data);
         await Utils.audit('create', 'stock_adjustment', data.id, { crop: data.crop, direction: data.direction, weight: data.weight, newAmount: data.value });
         Utils.hideModal('stock-adjustment-modal');
         Utils.showToast('Stock adjustment saved!');
-        this.render();
+        await this.syncAll();
     },
 
     async delete(id) {
@@ -315,7 +461,7 @@ const StockAdjustments = {
         if (linkedOpening) await DB.delete('opening_balances', id);
         await Utils.audit('delete', 'stock_adjustment', id, { oldRecord: adj, oldAmount: adj.value || 0 });
         Utils.showToast('Stock adjustment deleted!');
-        this.render();
+        await this.syncAll();
     }
 };
 
@@ -352,7 +498,8 @@ const InventoryLots = {
             .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0))
             .forEach(s => {
                 let remaining = s.netWeight || 0;
-                lots.filter(l => l.crop === s.crop).forEach(lot => {
+                const sCropLower = s.crop.trim().toLowerCase();
+                lots.filter(l => l.crop && l.crop.trim().toLowerCase() === sCropLower).forEach(lot => {
                     if (remaining <= 0) return;
                     const used = Math.min(lot.remainingWeight, remaining);
                     lot.remainingWeight -= used;
@@ -518,12 +665,14 @@ const FinanceReports = {
             if (t.type === 'deposit') running += t.amount || 0;
             else running -= t.amount || 0;
             allRows.push({
+                id: t.id,
                 date: t.date,
                 account: accountMap[t.accountId]?.name || 'Unknown',
                 description: t.description || '-',
                 deposit: t.type === 'deposit' ? t.amount || 0 : 0,
                 withdrawal: t.type === 'withdrawal' ? t.amount || 0 : 0,
                 balance: running,
+                isReconciled: t.isReconciled,
                 recon: t.isReconciled ? 'Reconciled' : 'Pending'
             });
         });
@@ -542,7 +691,7 @@ const FinanceReports = {
             <td class="text-right">${r.deposit ? 'PKR ' + Utils.formatPKR(r.deposit) : ''}</td>
             <td class="text-right">${r.withdrawal ? 'PKR ' + Utils.formatPKR(r.withdrawal) : ''}</td>
             <td class="text-right font-bold">PKR ${Utils.formatPKR(r.balance)}</td>
-            <td>${Utils.escapeHTML(r.recon)}</td>
+            <td>${r.id ? `<button class="btn btn-sm ${r.isReconciled ? 'btn-success' : 'btn-ghost'}" onclick="Capital.toggleReconciled('${r.id}', ${!r.isReconciled}).then(()=>FinanceReports.renderCashBook())">${r.isReconciled ? '✅ Reconciled' : '⏳ Pending'}</button>` : '-'}</td>
         </tr>`).join('') || '<tr><td colspan="7" class="text-center" style="color:var(--text-muted)">No cash book rows</td></tr>';
         this.cashBookRows = rows;
     },

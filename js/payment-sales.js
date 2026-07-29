@@ -79,6 +79,7 @@ const SalePayments = {
                 if (!document.getElementById('pay-account').value) { Utils.showToast('Select cash/bank account for this receipt', 'error'); return; }
                 const receiptNo = document.getElementById('pay-receipt-id').value;
                 const previousBalance = currentBalance;
+                const txId = Utils.generateId();
                 const payment = {
                     id: Utils.generateId(), receiptNo, saleId, buyerName: currentS.buyerName,
                     amount: payAmt, date: document.getElementById('pay-date').value,
@@ -88,34 +89,59 @@ const SalePayments = {
                     accountId: document.getElementById('pay-account').value,
                     previousBalance,
                     newBalance: previousBalance - payAmt,
+                    capitalTxId: txId,
                     createdAt: new Date().toISOString()
                 };
-                await DB.put('sale_payments', payment);
-                await Utils.confirmReceiptId('payment', receiptNo);
-                const tx = await Utils.createLinkedCapitalTx({
-                    accountId: payment.accountId,
-                    type: 'deposit',
-                    amount: payAmt,
-                    date: payment.date,
-                    description: `Receipt from buyer ${currentS.buyerName} for sale #${saleId}`,
-                    sourceStore: 'sale_payments',
-                    sourceId: payment.id
-                });
-                if (tx) payment.capitalTxId = tx.id;
-                if (tx) await DB.put('sale_payments', payment);
+
                 currentS.amountReceived = (currentS.amountReceived || 0) + payAmt;
                 currentS.balance = (currentS.amount || 0) - currentS.amountReceived;
                 currentS.paymentStatus = currentS.amountReceived >= (currentS.amount || 0) ? 'paid' : 'partial';
-                await DB.put('sales', currentS);
-                await Utils.audit('create', 'sale_payment', payment.id, {
-                    receiptNo,
-                    saleId,
-                    buyerName: currentS.buyerName,
-                    amount: payAmt,
-                    previousBalance,
-                    newBalance: payment.newBalance,
-                    capitalTxId: payment.capitalTxId || null
-                });
+
+                const ops = [
+                    { storeName: 'sale_payments', action: 'put', data: payment },
+                    {
+                        storeName: 'capital_transactions',
+                        action: 'put',
+                        data: {
+                            id: txId,
+                            accountId: payment.accountId,
+                            type: 'deposit',
+                            amount: payAmt,
+                            date: payment.date,
+                            description: `Receipt from buyer ${currentS.buyerName} for sale #${saleId}`,
+                            sourceStore: 'sale_payments',
+                            sourceId: payment.id,
+                            isReconciled: false,
+                            createdAt: new Date().toISOString()
+                        }
+                    },
+                    { storeName: 'sales', action: 'put', data: currentS },
+                    {
+                        storeName: 'audit_logs',
+                        action: 'put',
+                        data: {
+                            id: Utils.generateId(),
+                            date: Utils.todayISO(),
+                            action: 'create',
+                            entityType: 'sale_payment',
+                            entityId: payment.id,
+                            details: {
+                                receiptNo,
+                                saleId,
+                                buyerName: currentS.buyerName,
+                                amount: payAmt,
+                                previousBalance,
+                                newBalance: payment.newBalance,
+                                capitalTxId: txId
+                            },
+                            createdAt: new Date().toISOString()
+                        }
+                    }
+                ];
+
+                await DB.commitUnitOfWork(ops);
+                await Utils.confirmReceiptId('payment', receiptNo);
+
                 Utils.hideModal('payment-modal');
                 Utils.showToast('Payment received!');
                 if (printAfterSave) await ReceiptPDF.generatePaymentVoucher(payment, currentS, 'buyer');

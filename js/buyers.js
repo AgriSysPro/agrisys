@@ -14,10 +14,18 @@ const Buyers = {
     async render() {
         const buyers = await DB.getAll('buyers');
         const activeSeason = await Utils.getActiveSeason();
-        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
-        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
-        const search = (document.getElementById('b-search').value || '').toLowerCase();
+        const untilDate = activeSeason ? activeSeason.endDate : null;
 
+        const allSales = await DB.getAll('sales');
+        const sales = untilDate ? allSales.filter(s => s.date <= untilDate) : allSales;
+
+        const allSalePayments = await DB.getAll('sale_payments');
+        const salePayments = untilDate ? allSalePayments.filter(p => p.date <= untilDate) : allSalePayments;
+
+        const allOpenings = await DB.getAll('opening_balances');
+        const openings = untilDate ? allOpenings.filter(o => o.date <= untilDate) : allOpenings;
+
+        const search = (document.getElementById('b-search').value || '').toLowerCase();
         const filtered = buyers.filter(b => !search || b.name.toLowerCase().includes(search) || (b.phone || '').includes(search));
 
         const tbody = document.getElementById('buyers-tbody');
@@ -27,12 +35,13 @@ const Buyers = {
         empty.style.display = 'none';
 
         tbody.innerHTML = filtered.map(b => {
-            const bs = sales.filter(s => s.buyerName.toLowerCase() === b.name.toLowerCase());
+            const bs = sales.filter(s => s.buyerName && s.buyerName.toLowerCase() === b.name.toLowerCase());
             const openingReceivable = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const openingReceived = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.receivedAmount || o.settledAmount || 0), 0);
             const openingAdvance = openings.filter(o => o.type === 'buyer_advance' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            
             const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
-            const totalRcvd = openingReceived + bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
+            const totalRcvd = openingReceived + bs.reduce((s, x) => s + Utils.paymentTotalFor(x, salePayments, 'saleId', 'amountReceived', untilDate), 0);
             const balance = totalAmt - totalRcvd - openingAdvance;
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(b.name, search)}</td>

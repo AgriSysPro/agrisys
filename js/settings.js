@@ -9,6 +9,8 @@ const Settings = {
         perBagWeight: 100,
         defaultBardana: 1,
         defaultLabour: 0.5,
+        defaultCommission: 2.0,
+        defaultMandiTax: 1.0,
         receiptTemplate: {
             footerText: 'Thank you for your business',
             copyLayout: 'two-copy',
@@ -41,6 +43,8 @@ const Settings = {
             document.getElementById('set-per-bag').value = defs.perBagWeight || 100;
             document.getElementById('set-bardana').value = defs.defaultBardana || 1;
             document.getElementById('set-labour').value = defs.defaultLabour || 0.5;
+            if (document.getElementById('set-commission')) document.getElementById('set-commission').value = defs.defaultCommission || 2.0;
+            if (document.getElementById('set-mandi-tax')) document.getElementById('set-mandi-tax').value = defs.defaultMandiTax || 1.0;
         }
         const footer = document.getElementById('set-receipt-footer');
         if (footer) {
@@ -60,7 +64,7 @@ const Settings = {
 
     async getDefaults() {
         const defs = await DB.getSetting('defaults');
-        return defs || { perBagWeight: 100, defaultBardana: 1, defaultLabour: 0.5 };
+        return defs || { perBagWeight: 100, defaultBardana: 1, defaultLabour: 0.5, defaultCommission: 2.0, defaultMandiTax: 1.0 };
     },
 
     async getReceiptTemplate() {
@@ -103,7 +107,9 @@ const Settings = {
         const data = {
             perBagWeight: Utils.pf(document.getElementById('set-per-bag').value),
             defaultBardana: Utils.pf(document.getElementById('set-bardana').value),
-            defaultLabour: Utils.pf(document.getElementById('set-labour').value)
+            defaultLabour: Utils.pf(document.getElementById('set-labour').value),
+            defaultCommission: Utils.pf(document.getElementById('set-commission') ? document.getElementById('set-commission').value : 2.0),
+            defaultMandiTax: Utils.pf(document.getElementById('set-mandi-tax') ? document.getElementById('set-mandi-tax').value : 1.0)
         };
         await DB.setSetting('defaults', data);
         Utils.showToast('Default values saved!');
@@ -192,7 +198,7 @@ const Settings = {
     async clearAll() {
         const ok = await Utils.confirm('This will DELETE ALL DATA permanently. Are you sure?');
         if (!ok) return;
-        const stores = ['settings','purchases','farmers','purchase_payments','sales','sale_payments','expenses','capital_accounts','capital_transactions','buyers','farmer_advances','seasons','audit_logs','opening_balances','stock_adjustments','opening_balance_payments'];
+        const stores = ['settings','purchases','farmers','purchase_payments','sales','sale_payments','expenses','capital_accounts','capital_transactions','buyers','farmer_advances','deductions','journal_entries','seasons','audit_logs','opening_balances','stock_adjustments','opening_balance_payments','commissions','retained_earnings'];
         for (const s of stores) await DB.clear(s);
         Utils.showToast('All data cleared! Reloading...');
         setTimeout(() => location.reload(), 1500);

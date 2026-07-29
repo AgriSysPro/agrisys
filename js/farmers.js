@@ -14,11 +14,21 @@ const Farmers = {
     async render() {
         const farmers = await DB.getAll('farmers');
         const activeSeason = await Utils.getActiveSeason();
-        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
-        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason);
-        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
-        const search = (document.getElementById('f-search').value || '').toLowerCase();
+        const untilDate = activeSeason ? activeSeason.endDate : null;
 
+        const allPurchases = await DB.getAll('purchases');
+        const purchases = untilDate ? allPurchases.filter(p => p.date <= untilDate) : allPurchases;
+
+        const allPurchasePayments = await DB.getAll('purchase_payments');
+        const purchasePayments = untilDate ? allPurchasePayments.filter(p => p.date <= untilDate) : allPurchasePayments;
+
+        const allAdvances = await DB.getAll('farmer_advances');
+        const advances = untilDate ? allAdvances.filter(a => a.date <= untilDate) : allAdvances;
+
+        const allOpenings = await DB.getAll('opening_balances');
+        const openings = untilDate ? allOpenings.filter(o => o.date <= untilDate) : allOpenings;
+
+        const search = (document.getElementById('f-search').value || '').toLowerCase();
         const filtered = farmers.filter(f => !search || f.name.toLowerCase().includes(search) || (f.phone || '').includes(search));
 
         const tbody = document.getElementById('farmers-tbody');
@@ -28,13 +38,16 @@ const Farmers = {
         empty.style.display = 'none';
 
         tbody.innerHTML = filtered.map(f => {
-            const fp = purchases.filter(p => p.farmerName.toLowerCase() === f.name.toLowerCase());
+            const fp = purchases.filter(p => p.farmerName && p.farmerName.toLowerCase() === f.name.toLowerCase());
             const openingPayable = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const openingPaid = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.paidAmount || o.settledAmount || 0), 0);
             const openingAdvance = openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
+            
             const totalAmt = openingPayable + fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
-            const totalPaid = openingPaid + fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
-            const openAdv = openingAdvance + advances.filter(a => a.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, a) => s + a.amount, 0);
+            const totalPaid = openingPaid + fp.reduce((s, p) => s + Utils.paymentTotalFor(p, purchasePayments, 'purchaseId', 'amountPaid', untilDate), 0);
+            const givenAdv = advances.filter(a => a.farmerName && a.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, a) => s + (a.amount || 0), 0);
+            const recoveredAdv = fp.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+            const openAdv = Math.max(0, openingAdvance + givenAdv - recoveredAdv);
             const balance = totalAmt - totalPaid;
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(f.name, search)}</td>

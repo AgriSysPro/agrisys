@@ -142,7 +142,22 @@ const App = {
 
     setupKeyboardShortcuts() {
         document.addEventListener('keydown', (e) => {
-            // Don't trigger shortcuts when typing in inputs
+            // Mandi speed shortcuts
+            if (e.key === 'F1' || (e.altKey && (e.key === 'd' || e.key === 'D'))) { e.preventDefault(); this.navigate('dashboard'); }
+            else if (e.key === 'F2' || (e.altKey && (e.key === 'p' || e.key === 'P'))) { e.preventDefault(); this.navigate('purchasing'); }
+            else if (e.key === 'F3' || (e.altKey && (e.key === 's' || e.key === 'S'))) { e.preventDefault(); this.navigate('selling'); }
+            else if (e.key === 'F4' || (e.altKey && (e.key === 'f' || e.key === 'F'))) { e.preventDefault(); this.navigate('farmers'); }
+            else if (e.key === 'F5' || (e.altKey && (e.key === 'b' || e.key === 'B'))) { e.preventDefault(); this.navigate('buyers'); }
+            else if (e.key === 'F7' || (e.altKey && (e.key === 'j' || e.key === 'J'))) { e.preventDefault(); this.navigate('bookkeeping'); }
+            else if (e.key === 'F8' || (e.altKey && (e.key === 'r' || e.key === 'R'))) { e.preventDefault(); this.navigate('reports'); }
+
+            // Ctrl+Enter inside forms to save
+            if (e.ctrlKey && e.key === 'Enter') {
+                if (this.currentSection === 'purchasing') { e.preventDefault(); Purchasing.save(); }
+                else if (this.currentSection === 'selling') { e.preventDefault(); Selling.save(); }
+            }
+
+            // Don't trigger standard shortcuts when typing in inputs
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
                 if (e.key === 'Escape') e.target.blur();
                 return;
@@ -158,12 +173,14 @@ const App = {
             }
             if (e.key === 'Escape') {
                 // Close any open modal
+                let closedModal = false;
                 document.querySelectorAll('.modal-overlay.active').forEach(m => {
                     m.classList.remove('active');
                     document.body.style.overflow = '';
+                    closedModal = true;
                 });
-                // Navigate to dashboard if no modal open
-                if (!document.querySelector('.modal-overlay.active')) {
+                // Navigate to dashboard if no modal was closed
+                if (!closedModal) {
                     this.navigate('dashboard');
                 }
             }
@@ -213,20 +230,23 @@ const App = {
     },
 
     async loadDashboard() {
-        let purchases = await DB.getAll('purchases');
-        let sales = await DB.getAll('sales');
-        let expenses = await DB.getAll('expenses');
-        let stockAdjustments = await DB.getAll('stock_adjustments');
+        let rawPurchases = await DB.getAll('purchases');
+        let rawSales = await DB.getAll('sales');
+        let rawExpenses = await DB.getAll('expenses');
+        let rawStockAdjustments = await DB.getAll('stock_adjustments');
+
+        let purchases = rawPurchases;
+        let sales = rawSales;
+        let expenses = rawExpenses;
+        let stockAdjustments = rawStockAdjustments;
 
         // Apply season filter if active
         const activeSeason = typeof SeasonManager !== 'undefined' ? await SeasonManager.getActiveSeason() : null;
         if (activeSeason) {
-            purchases = SeasonManager.filterByActiveSeason(purchases, activeSeason);
-            sales = SeasonManager.filterByActiveSeason(sales, activeSeason);
-            expenses = SeasonManager.filterByActiveSeason(expenses, activeSeason);
-            stockAdjustments = SeasonManager.filterByActiveSeason(stockAdjustments, activeSeason);
-        } else {
-            purchases = purchases.filter(p => p.type !== 'opening_balance');
+            purchases = SeasonManager.filterByActiveSeason(rawPurchases, activeSeason);
+            sales = SeasonManager.filterByActiveSeason(rawSales, activeSeason);
+            expenses = SeasonManager.filterByActiveSeason(rawExpenses, activeSeason);
+            stockAdjustments = SeasonManager.filterByActiveSeason(rawStockAdjustments, activeSeason);
         }
         const adjustedStock = Utils.applyStockAdjustments(purchases, sales, stockAdjustments);
         const stockPurchases = adjustedStock.purchases;
@@ -279,39 +299,52 @@ const App = {
             </div>
         `;
 
-        // Inventory Stock Calculation
+        // Inventory Stock Calculation (Case-Insensitive Grouping)
         const stockMap = {};
+        const getCropKey = (cropName) => {
+            if (!cropName) return null;
+            const trimmed = cropName.trim();
+            const existingKey = Object.keys(stockMap).find(k => k.toLowerCase() === trimmed.toLowerCase());
+            return existingKey || trimmed;
+        };
+
         stockPurchases.forEach(p => {
-            if (!stockMap[p.crop]) stockMap[p.crop] = { weight: 0, bags: 0 };
-            stockMap[p.crop].weight += (p.netWeight || 0);
-            stockMap[p.crop].bags += (p.netBags || 0);
+            const key = getCropKey(p.crop);
+            if (!key) return;
+            if (!stockMap[key]) stockMap[key] = { name: p.crop.trim(), weight: 0 };
+            stockMap[key].weight += (p.netWeight || 0);
         });
 
         stockSales.forEach(s => {
-            if (!stockMap[s.crop]) stockMap[s.crop] = { weight: 0, bags: 0 };
-            stockMap[s.crop].weight -= (s.netWeight || 0);
-            const saleBags = (s.netWeight || s.grossWeight || 0) / (s.perBagWeight || s.perBag || 100);
-            stockMap[s.crop].bags -= saleBags;
+            const key = getCropKey(s.crop);
+            if (!key) return;
+            if (!stockMap[key]) stockMap[key] = { name: s.crop.trim(), weight: 0 };
+            stockMap[key].weight -= (s.netWeight || 0);
         });
 
         const stockContainer = document.getElementById('dashboard-stock');
         let stockHtml = '';
-        for (const [crop, data] of Object.entries(stockMap)) {
+        for (const [key, data] of Object.entries(stockMap)) {
+            const bags = data.weight / 100;
             stockHtml += `
             <div class="stat-card" style="border-left-color:${data.weight < 0 ? 'var(--accent-danger)' : 'var(--text-muted)'}">
-                <div class="stat-label">${Utils.escapeHTML(crop)}${data.weight < 0 ? ' (Oversold)' : ''}</div>
+                <div class="stat-label">${Utils.escapeHTML(data.name)}${data.weight < 0 ? ' (Oversold)' : ''}</div>
                 <div class="stat-value" style="font-size:1.4rem">${Utils.formatNum(data.weight, 2)} KG</div>
-                <div class="stat-sub">~${Utils.formatNum(data.weight / 40, 2)} Mn | ${Utils.formatNum(data.bags, 1)} Bags</div>
+                <div class="stat-sub">~${Utils.formatNum(data.weight / 40, 2)} Mn | ${Utils.formatNum(bags, 1)} Bags</div>
             </div>`;
         }
         stockContainer.innerHTML = stockHtml || '<div style="grid-column:1/-1;text-align:center;padding:12px;color:var(--text-muted)">Warehouse is currently empty.</div>';
 
         // Crop Analysis Dashboard
-        await CropAnalysis.init();
-        await CropAnalysis.render();
+        try {
+            await CropAnalysis.init();
+            await CropAnalysis.render();
+        } catch (e) {
+            console.error('CropAnalysis render error:', e);
+        }
 
-        // Profit Chart
-        this.renderProfitChart(purchases, sales, expenses);
+        // Profit Chart (Pass full raw datasets so last 6 calendar months render properly after layout reflow)
+        setTimeout(() => this.renderProfitChart(rawPurchases, rawSales, rawExpenses), 50);
 
         // Recent purchases
         const recent = [...purchases].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
@@ -335,24 +368,29 @@ const App = {
     renderProfitChart(purchases, sales, expenses) {
         const canvas = document.getElementById('profit-chart');
         if (!canvas) return;
-        const ctx = canvas.getContext('2d');
+        const rect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : null;
+        const w = (rect && rect.width > 0) ? rect.width : (canvas.clientWidth || 600);
+        const h = 220;
         const dpr = window.devicePixelRatio || 1;
-        const rect = canvas.parentElement.getBoundingClientRect();
-        const w = rect.width || 600;
-        const h = 200;
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         canvas.style.width = w + 'px';
         canvas.style.height = h + 'px';
+        const ctx = canvas.getContext('2d');
         ctx.scale(dpr, dpr);
-        ctx.clearRect(0, 0, w, h);
+
+        // Fill crisp white background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
 
         // Compute last 6 months data
         const months = [];
         const now = new Date();
         for (let i = 5; i >= 0; i--) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const key = d.toISOString().slice(0, 7); // YYYY-MM
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const key = `${year}-${month}`;
             const label = d.toLocaleString('en', { month: 'short' });
             const rev = sales.filter(s => s.date && s.date.startsWith(key)).reduce((s, x) => s + (x.amount || 0), 0);
             const cost = purchases.filter(p => p.date && p.date.startsWith(key)).reduce((s, x) => s + Utils.purchaseCostAmount(x), 0);
@@ -360,19 +398,19 @@ const App = {
             months.push({ label, rev, cost, exp, profit: rev - cost - exp });
         }
 
-        const maxVal = Math.max(1, ...months.map(m => Math.max(m.rev, m.cost)));
+        const maxVal = Math.max(1, ...months.map(m => Math.max(m.rev, m.cost))) * 1.15;
         const chartLeft = 60;
         const chartRight = w - 20;
-        const chartTop = 20;
-        const chartBottom = h - 30;
+        const chartTop = 25;
+        const chartBottom = h - 35;
         const chartW = chartRight - chartLeft;
         const chartH = chartBottom - chartTop;
         const barGroupWidth = chartW / months.length;
-        const barWidth = barGroupWidth * 0.3;
+        const barWidth = Math.min(barGroupWidth * 0.32, 28);
 
         // Grid lines
-        ctx.strokeStyle = 'rgba(203,213,225,0.6)';
-        ctx.lineWidth = 0.5;
+        ctx.strokeStyle = 'rgba(226, 232, 240, 0.9)';
+        ctx.lineWidth = 1;
         for (let i = 0; i <= 4; i++) {
             const y = chartTop + (chartH / 4) * i;
             ctx.beginPath();
@@ -381,53 +419,71 @@ const App = {
             ctx.stroke();
             // Labels
             ctx.fillStyle = '#475569';
-            ctx.font = '10px Inter, sans-serif';
+            ctx.font = '600 11px Inter, sans-serif';
             ctx.textAlign = 'right';
             const val = maxVal - (maxVal / 4) * i;
             ctx.fillText(val >= 1000 ? (val / 1000).toFixed(0) + 'K' : val.toFixed(0), chartLeft - 8, y + 4);
         }
 
         months.forEach((m, i) => {
-            const x = chartLeft + barGroupWidth * i + barGroupWidth * 0.15;
+            const groupX = chartLeft + barGroupWidth * i;
+            const centerX = groupX + barGroupWidth / 2;
+            const revX = centerX - barWidth - 2;
+            const costX = centerX + 2;
+
             const revH = (m.rev / maxVal) * chartH;
             const costH = (m.cost / maxVal) * chartH;
 
-            // Revenue bar
-            const grad1 = ctx.createLinearGradient(x, chartBottom - revH, x, chartBottom);
-            grad1.addColorStop(0, '#10b981');
-            grad1.addColorStop(1, '#06b6d4');
-            ctx.fillStyle = grad1;
-            ctx.beginPath();
-            ctx.roundRect(x, chartBottom - revH, barWidth, revH, [3, 3, 0, 0]);
-            ctx.fill();
+            // Revenue bar (Emerald Gradient)
+            if (revH > 0) {
+                const grad1 = ctx.createLinearGradient(revX, chartBottom - revH, revX, chartBottom);
+                grad1.addColorStop(0, '#10b981');
+                grad1.addColorStop(1, '#059669');
+                ctx.fillStyle = grad1;
+                ctx.beginPath();
+                if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(revX, chartBottom - revH, barWidth, revH, [4, 4, 0, 0]);
+                } else {
+                    ctx.rect(revX, chartBottom - revH, barWidth, revH);
+                }
+                ctx.fill();
+            }
 
-            // Cost bar
-            const grad2 = ctx.createLinearGradient(x + barWidth + 2, chartBottom - costH, x + barWidth + 2, chartBottom);
-            grad2.addColorStop(0, '#3b82f6');
-            grad2.addColorStop(1, '#8b5cf6');
-            ctx.fillStyle = grad2;
-            ctx.beginPath();
-            ctx.roundRect(x + barWidth + 2, chartBottom - costH, barWidth, costH, [3, 3, 0, 0]);
-            ctx.fill();
+            // Cost bar (Royal Blue Gradient)
+            if (costH > 0) {
+                const grad2 = ctx.createLinearGradient(costX, chartBottom - costH, costX, chartBottom);
+                grad2.addColorStop(0, '#3b82f6');
+                grad2.addColorStop(1, '#2563eb');
+                ctx.fillStyle = grad2;
+                ctx.beginPath();
+                if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(costX, chartBottom - costH, barWidth, costH, [4, 4, 0, 0]);
+                } else {
+                    ctx.rect(costX, chartBottom - costH, barWidth, costH);
+                }
+                ctx.fill();
+            }
 
             // Month label
-            ctx.fillStyle = '#64748b';
-            ctx.font = '11px Inter, sans-serif';
+            ctx.fillStyle = '#334155';
+            ctx.font = '600 11px Inter, sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText(m.label, x + barWidth, chartBottom + 16);
+            ctx.fillText(m.label, centerX, chartBottom + 18);
         });
 
         // Legend
+        const legendY = h - 8;
         ctx.fillStyle = '#10b981';
-        ctx.fillRect(chartLeft, h - 12, 10, 10);
-        ctx.fillStyle = '#475569';
-        ctx.font = '10px Inter, sans-serif';
+        ctx.fillRect(chartLeft, legendY - 8, 10, 8);
+        ctx.fillStyle = '#1e293b';
+        ctx.font = '600 11px Inter, sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('Revenue', chartLeft + 14, h - 3);
+        ctx.fillText('Revenue', chartLeft + 14, legendY);
+
         ctx.fillStyle = '#3b82f6';
-        ctx.fillRect(chartLeft + 70, h - 12, 10, 10);
-        ctx.fillStyle = '#475569';
-        ctx.fillText('Cost', chartLeft + 84, h - 3);
+        ctx.fillRect(chartLeft + 90, legendY - 8, 10, 8);
+        ctx.fillStyle = '#1e293b';
+        ctx.fillText('Cost', chartLeft + 104, legendY);
     },
 
     async checkAutoBackup() {

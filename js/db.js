@@ -3,7 +3,7 @@
 const DB = {
     db: null,
     DB_NAME: 'AgriSysDB',
-    DB_VERSION: 8,
+    DB_VERSION: 9,
 
     async init() {
         return new Promise((resolve, reject) => {
@@ -139,6 +139,18 @@ const DB = {
                     store.createIndex('date', 'date');
                     store.createIndex('type', 'type');
                 }
+
+                // V9: Commissions and Retained Earnings stores
+                if (!db.objectStoreNames.contains('commissions')) {
+                    const store = db.createObjectStore('commissions', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('farmerName', 'farmerName');
+                    store.createIndex('buyerName', 'buyerName');
+                    store.createIndex('crop', 'crop');
+                }
+                if (!db.objectStoreNames.contains('retained_earnings')) {
+                    db.createObjectStore('retained_earnings', { keyPath: 'seasonId' });
+                }
             };
 
             request.onsuccess = (e) => { this.db = e.target.result; resolve(); };
@@ -152,7 +164,10 @@ const DB = {
             const tx = this.db.transaction(storeName, 'readonly');
             const store = tx.objectStore(storeName);
             const req = store.getAll();
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => {
+                const results = (req.result || []).filter(r => !r || !r.isDeleted);
+                resolve(results);
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -162,7 +177,11 @@ const DB = {
             const tx = this.db.transaction(storeName, 'readonly');
             const store = tx.objectStore(storeName);
             const req = store.get(key);
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => {
+                const record = req.result;
+                if (record && record.isDeleted) resolve(null);
+                else resolve(record);
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -178,6 +197,16 @@ const DB = {
     },
 
     async delete(storeName, key) {
+        // Soft-delete by setting isDeleted flag
+        const record = await this.get(storeName, key);
+        if (record) {
+            record.isDeleted = true;
+            record.deletedAt = new Date().toISOString();
+            return this.put(storeName, record);
+        }
+    },
+
+    async hardDelete(storeName, key) {
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
@@ -193,7 +222,36 @@ const DB = {
             const store = tx.objectStore(storeName);
             const index = store.index(indexName);
             const req = index.getAll(value);
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => {
+                const results = (req.result || []).filter(r => !r || !r.isDeleted);
+                resolve(results);
+            };
+            req.onerror = () => reject(req.error);
+        });
+    },
+
+    async getByDateRange(storeName, startDate, endDate) {
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction(storeName, 'readonly');
+            const store = tx.objectStore(storeName);
+            const index = store.index('date');
+            const range = (startDate && endDate)
+                ? IDBKeyRange.bound(startDate, endDate)
+                : startDate ? IDBKeyRange.lowerBound(startDate)
+                : endDate ? IDBKeyRange.upperBound(endDate)
+                : null;
+
+            const results = [];
+            const req = range ? index.openCursor(range) : index.openCursor();
+            req.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                    if (!cursor.value.isDeleted) results.push(cursor.value);
+                    cursor.continue();
+                } else {
+                    resolve(results);
+                }
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -218,9 +276,37 @@ const DB = {
         });
     },
 
+    // Commit a list of operations synchronously within a single atomic IDB transaction
+    async commitUnitOfWork(operations) {
+        if (!operations || !operations.length) return true;
+        const storeNames = [...new Set(operations.map(op => op.storeName))];
+
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction(storeNames, 'readwrite');
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = (e) => reject(e.target.error);
+            tx.onabort = () => reject(new Error('Unit of work transaction aborted'));
+
+            for (const op of operations) {
+                const store = tx.objectStore(op.storeName);
+                if (op.action === 'put') {
+                    store.put(op.data);
+                } else if (op.action === 'delete') {
+                    if (op.softDelete) {
+                        op.data.isDeleted = true;
+                        op.data.deletedAt = new Date().toISOString();
+                        store.put(op.data);
+                    } else {
+                        store.delete(op.key);
+                    }
+                }
+            }
+        });
+    },
+
     // Execute multiple operations in a single atomic transaction
     async transact(storeNames, mode, callback) {
-        return new Promise(async (resolve, reject) => {
+        return new Promise((resolve, reject) => {
             const tx = this.db.transaction(storeNames, mode);
             tx.oncomplete = () => resolve(true);
             tx.onerror = () => reject(tx.error);
@@ -231,7 +317,7 @@ const DB = {
                 storeNames.forEach(name => {
                     stores[name] = tx.objectStore(name);
                 });
-                await callback(stores, tx);
+                callback(stores, tx);
             } catch (err) {
                 try { tx.abort(); } catch(e) {}
                 reject(err);
@@ -251,7 +337,7 @@ const DB = {
 
     // Backup all data
     async exportAll() {
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
         const data = {};
         for (const s of stores) {
             data[s] = await this.getAll(s);
@@ -261,16 +347,36 @@ const DB = {
         return data;
     },
 
-    // Restore all data
+    // Restore all data atomically with pre-validation
     async importAll(data) {
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments'];
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid backup file payload');
+        }
+
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
+        
+        // Validate store structures before clearing
         for (const s of stores) {
-            if (data[s]) {
-                await this.clear(s);
-                for (const record of data[s]) {
-                    await this.put(s, record);
-                }
+            if (data[s] && !Array.isArray(data[s])) {
+                throw new Error(`Invalid data array format for store: ${s}`);
             }
         }
+
+        // Atomic multi-store restore
+        return new Promise((resolve, reject) => {
+            const activeStores = stores.filter(s => Array.isArray(data[s]));
+            if (!activeStores.length) return resolve(false);
+
+            const tx = this.db.transaction(activeStores, 'readwrite');
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = (e) => reject(new Error('Atomic import failed and was rolled back: ' + e.target.error));
+
+            activeStores.forEach(s => {
+                const store = tx.objectStore(s);
+                store.clear();
+                data[s].forEach(record => store.put(record));
+            });
+        });
     }
 };
+

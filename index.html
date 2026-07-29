@@ -218,6 +218,8 @@
                 <div class="form-grid" style="margin-bottom:12px">
                     <div class="form-group"><label class="form-label">Bardana (KG per Bag)</label><input class="form-input" type="number" id="p-bardana" step="0.01" value="0" oninput="Purchasing.calculate()"><span class="form-hint">Total: <strong id="p-bardana-total">0 KG</strong></span></div>
                     <div class="form-group"><label class="form-label">Labour (KG per Bag)</label><input class="form-input" type="number" id="p-labour" step="0.01" value="0" oninput="Purchasing.calculate()"><span class="form-hint">Total: <strong id="p-labour-total">0 KG</strong></span></div>
+                    <div class="form-group"><label class="form-label">Commission Fee (%)</label><input class="form-input" type="number" id="p-commission" step="0.1" value="2.0" oninput="Purchasing.calculate()"><span class="form-hint">Total: <strong id="p-commission-total">PKR 0.00</strong></span></div>
+                    <div class="form-group"><label class="form-label">Mandi Tax (%)</label><input class="form-input" type="number" id="p-mandi-tax" step="0.1" value="1.0" oninput="Purchasing.calculate()"><span class="form-hint">Total: <strong id="p-mandi-tax-total">PKR 0.00</strong></span></div>
                 </div>
                 <div class="form-group full-width" style="margin-bottom:8px"><label class="form-label">Additional Deductions</label><button class="btn btn-ghost btn-sm" onclick="Purchasing.addDeduction()"><i data-lucide="plus"></i> Add Deduction</button></div>
                 <div class="deduction-list" id="p-additional-deductions"></div>
@@ -487,12 +489,17 @@
         <!-- ===== STOCK ADJUSTMENTS ===== -->
         <div class="section" id="sec-stock-adjustments">
             <div class="page-header">
-                <div><h1 class="page-title">Stock Adjustments</h1><p class="page-title-sub">Correct stock for shortage, damage, moisture loss, or opening stock</p></div>
+                <div><h1 class="page-title">Stock Adjustments & Current Inventory</h1><p class="page-title-sub">View current available stock and record stock adjustments for shortage, damage, moisture loss, or surplus</p></div>
                 <div class="page-actions"><button class="btn btn-primary" onclick="StockAdjustments.showModal()"><i data-lucide="plus"></i> Add Adjustment</button></div>
             </div>
+            
+            <!-- Live Current Stock Summary Cards -->
+            <div class="stats-grid" id="stock-adj-live-summary" style="margin-bottom:20px"></div>
+
             <div class="card">
+                <div class="card-header"><h3 class="card-title">Stock Adjustment History</h3></div>
                 <div class="table-container"><table class="data-table">
-                    <thead><tr><th>Date</th><th>Crop</th><th>Direction</th><th>Reason</th><th class="text-right">Weight</th><th class="text-right">Value</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Date</th><th>Crop</th><th>Direction</th><th>Reason</th><th class="text-right">Weight</th><th class="text-right">Value Impact</th><th>Actions</th></tr></thead>
                     <tbody id="stock-adj-tbody"></tbody>
                 </table></div>
             </div>
@@ -749,6 +756,8 @@
                     <div class="form-group"><label class="form-label">Default Per Bag Weight (KG)</label><input class="form-input" type="number" id="set-per-bag" value="100"></div>
                     <div class="form-group"><label class="form-label">Default Bardana (KG/Bag)</label><input class="form-input" type="number" id="set-bardana" value="1"></div>
                     <div class="form-group"><label class="form-label">Default Labour (KG/Bag)</label><input class="form-input" type="number" id="set-labour" value="0.5"></div>
+                    <div class="form-group"><label class="form-label">Default Commission Rate (%)</label><input class="form-input" type="number" id="set-commission" step="0.1" value="2.0"></div>
+                    <div class="form-group"><label class="form-label">Default Mandi Tax Rate (%)</label><input class="form-input" type="number" id="set-mandi-tax" step="0.1" value="1.0"></div>
                 </div>
                 <button class="btn btn-primary" style="margin-top:16px" onclick="Settings.saveDefaults()"><i data-lucide="save"></i> Save Defaults</button>
             </div>
@@ -962,12 +971,13 @@
         <div class="modal-body">
             <div class="form-grid">
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="sa-date"></div>
-                <div class="form-group"><label class="form-label">Crop</label><select class="form-select" id="sa-crop"><option value="">Select Crop</option></select></div>
-                <div class="form-group"><label class="form-label">Direction</label><select class="form-select" id="sa-direction"><option value="decrease">Decrease Stock</option><option value="increase">Increase Stock</option><option value="opening">Opening Stock</option></select></div>
+                <div class="form-group"><label class="form-label">Crop</label><select class="form-select" id="sa-crop" onchange="StockAdjustments.updateStockBadge()"><option value="">Select Crop</option></select></div>
+                <div class="form-group"><label class="form-label">Direction</label><select class="form-select" id="sa-direction" onchange="StockAdjustments.updateStockBadge()"><option value="decrease">Decrease Stock (Shortage/Loss)</option><option value="increase">Increase Stock (Surplus)</option><option value="opening">Opening Stock</option></select></div>
                 <div class="form-group"><label class="form-label">Reason</label><select class="form-select" id="sa-reason"><option value="Shortage">Shortage</option><option value="Moisture Loss">Moisture Loss</option><option value="Damage">Damage</option><option value="Wastage">Wastage</option><option value="Correction">Correction</option><option value="Opening Stock">Opening Stock</option></select></div>
-                <div class="form-group"><label class="form-label">Weight (KG)</label><input class="form-input" type="number" id="sa-weight" step="0.01"></div>
+                <div class="form-group full-width" id="sa-stock-info-badge" style="display:none;"></div>
+                <div class="form-group"><label class="form-label">Adjustment Weight (KG)</label><input class="form-input" type="number" id="sa-weight" step="0.01" placeholder="e.g. 50"></div>
                 <div class="form-group"><label class="form-label">Value Impact (PKR)</label><input class="form-input" type="number" id="sa-value" step="0.01" value="0"></div>
-                <div class="form-group full-width"><label class="form-label">Notes</label><textarea class="form-textarea" id="sa-notes"></textarea></div>
+                <div class="form-group full-width"><label class="form-label">Notes / Explanation</label><textarea class="form-textarea" id="sa-notes" placeholder="Enter details..."></textarea></div>
             </div>
         </div>
         <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('stock-adjustment-modal')">Cancel</button><button class="btn btn-primary" onclick="StockAdjustments.save()">Save</button></div>

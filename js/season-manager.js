@@ -150,7 +150,15 @@ const SeasonManager = {
 
     filterByActiveSeason(records, season) {
         if (!season) return records;
-        return records.filter(r => r.date >= season.startDate && r.date <= season.endDate);
+        return records.filter(r => {
+            if (!r.date) return true;
+            const rDate = String(r.date).split('T')[0];
+            const sStart = season.startDate ? String(season.startDate).split('T')[0] : '';
+            const sEnd = season.endDate ? String(season.endDate).split('T')[0] : '';
+            if (sStart && rDate < sStart) return false;
+            if (sEnd && rDate > sEnd) return false;
+            return true;
+        });
     },
 
     async renderSettings() {
