@@ -129,6 +129,7 @@ const App = {
             case 'settings':
                 if (typeof SeasonManager !== 'undefined') await SeasonManager.renderSettings();
                 await Settings.renderAudit();
+                if (typeof BackupManager !== 'undefined') await BackupManager.renderVaultUI();
                 break;
         }
     },
@@ -488,25 +489,9 @@ const App = {
 
     async checkAutoBackup() {
         try {
-            const lastBackup = localStorage.getItem('agrisys_last_backup_time');
-            const now = Date.now();
-            const oneDay = 24 * 60 * 60 * 1000; // 24 hours
-
-            if (lastBackup && (now - parseInt(lastBackup)) < oneDay) {
-                return; // Less than 24 hours since last backup
+            if (typeof BackupManager !== 'undefined') {
+                await BackupManager.init();
             }
-
-            // Check if there's any data worth backing up
-            const pCount = await DB.count('purchases');
-            const sCount = await DB.count('sales');
-            if (pCount === 0 && sCount === 0) return; // No data
-
-            // Trigger backup after a short delay so the UI finishes loading
-            setTimeout(async () => {
-                Utils.showToast('Auto backup: Generating daily backup...');
-                await Settings.backup();
-                localStorage.setItem('agrisys_last_backup_time', Date.now().toString());
-            }, 2000);
         } catch (e) {
             console.warn('Auto-backup check failed:', e);
         }

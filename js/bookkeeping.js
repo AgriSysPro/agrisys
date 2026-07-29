@@ -155,14 +155,32 @@ const Bookkeeping = {
 
         // ── Purchase payment entries ──
         pPayments.forEach(p => {
-            entries.push({ date: p.date, description: `Payment to: ${p.farmerName} (#${p.purchaseId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Payable (Farmer)', debit: p.amount, credit: 0, type: 'payment' });
-            entries.push({ date: p.date, description: `Payment to: ${p.farmerName} (#${p.purchaseId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: 0, credit: p.amount, type: 'payment' });
+            const totalPay = p.amount || 0;
+            const advDeduct = p.advanceDeducted || 0;
+            const netCash = p.netCashAmount !== undefined ? p.netCashAmount : Math.max(0, totalPay - advDeduct);
+
+            entries.push({ date: p.date, description: `Payment to: ${p.farmerName} (#${p.purchaseId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Payable (Farmer)', debit: totalPay, credit: 0, type: 'payment' });
+            if (advDeduct > 0) {
+                entries.push({ date: p.date, description: `Advance adjusted for farmer payment: ${p.farmerName}`, account: 'Advances to Farmers', debit: 0, credit: advDeduct, type: 'payment' });
+            }
+            if (netCash > 0) {
+                entries.push({ date: p.date, description: `Payment to: ${p.farmerName} (#${p.purchaseId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: 0, credit: netCash, type: 'payment' });
+            }
         });
 
         // ── Sale payment received entries ──
         sPayments.forEach(p => {
-            entries.push({ date: p.date, description: `Received from: ${p.buyerName} (#${p.saleId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: p.amount, credit: 0, type: 'receipt' });
-            entries.push({ date: p.date, description: `Received from: ${p.buyerName} (#${p.saleId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: p.amount, type: 'receipt' });
+            const totalRcvd = p.amount || 0;
+            const advDeduct = p.advanceDeducted || 0;
+            const netCash = p.netCashAmount !== undefined ? p.netCashAmount : Math.max(0, totalRcvd - advDeduct);
+
+            if (netCash > 0) {
+                entries.push({ date: p.date, description: `Received from: ${p.buyerName} (#${p.saleId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: netCash, credit: 0, type: 'receipt' });
+            }
+            if (advDeduct > 0) {
+                entries.push({ date: p.date, description: `Buyer deposit applied: ${p.buyerName}`, account: 'Buyer Advances / Deposits', debit: advDeduct, credit: 0, type: 'receipt' });
+            }
+            entries.push({ date: p.date, description: `Received from: ${p.buyerName} (#${p.saleId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: totalRcvd, type: 'receipt' });
         });
 
         // ── Expense entries ──

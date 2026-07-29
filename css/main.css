@@ -768,6 +768,8 @@ a:hover { color: var(--accent-primary-hover); }
     flex: 1;
     min-width: 200px;
     position: relative;
+    display: flex;
+    align-items: center;
 }
 
 .search-input input {
@@ -788,7 +790,7 @@ a:hover { color: var(--accent-primary-hover); }
     box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
 }
 
-.search-input i {
+.search-input i, .search-input svg {
     position: absolute;
     left: 14px;
     top: 50%;
@@ -796,6 +798,8 @@ a:hover { color: var(--accent-primary-hover); }
     color: var(--text-muted);
     width: 16px;
     height: 16px;
+    pointer-events: none;
+    z-index: 2;
 }
 
 .filter-select {

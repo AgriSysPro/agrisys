@@ -310,23 +310,32 @@
         <!-- ===== PURCHASE PAYMENTS ===== -->
         <div class="section" id="sec-purchase-payments">
             <div class="page-header">
-                <div><h1 class="page-title">Farmer Payments</h1><p class="page-title-sub">Track payments to farmers</p></div>
-                <div class="page-actions"><button class="btn btn-ghost" onclick="PurchasePayments.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+                <div><h1 class="page-title">Farmer Payments</h1><p class="page-title-sub">Track and record payments to farmers</p></div>
+                <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="PurchasePayments.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
+                    <button class="btn btn-primary" onclick="PurchasePayments.showDirectPaymentModal()"><i data-lucide="plus-circle"></i> General Farmer Payment</button>
+                </div>
             </div>
+
+            <!-- Analytical Summary KPI Cards -->
+            <div class="stats-grid" id="pp-kpi-grid" style="margin-bottom:20px"></div>
+
             <div class="filter-bar">
-                <div class="search-input"><i data-lucide="search"></i><input id="pp-search" placeholder="Search..." oninput="PurchasePayments.render()"></div>
-                <select class="filter-select" id="pp-filter" onchange="PurchasePayments.render()"><option value="">All</option><option value="paid">Paid</option><option value="partial">Partial</option><option value="pending">Pending</option></select>
+                <div class="search-input"><i data-lucide="search"></i><input id="pp-search" placeholder="Search farmer, receipt ID..." oninput="PurchasePayments.render()"></div>
+                <select class="filter-select" id="pp-filter" onchange="PurchasePayments.render()"><option value="">All Status</option><option value="paid">Paid</option><option value="partial">Partial</option><option value="pending">Pending</option></select>
+                <select class="filter-select" id="pp-mode-filter" onchange="PurchasePayments.renderHistory()"><option value="">All Payment Modes</option><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option><option value="online">Online</option></select>
             </div>
             <div class="card">
+                <div class="card-header"><h3 class="card-title">Pending & Recent Farmer Purchases</h3></div>
                 <div class="table-container"><table class="data-table">
-                    <thead><tr><th>Receipt ID</th><th>Date</th><th>Farmer</th><th>Crop</th><th class="text-right">Amount</th><th class="text-right">Paid</th><th class="text-right">Balance</th><th>Status</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Receipt ID</th><th>Date</th><th>Farmer</th><th>Crop</th><th class="text-right">Net Payable</th><th class="text-right">Paid</th><th class="text-right">Balance</th><th>Status</th><th>Actions</th></tr></thead>
                     <tbody id="pp-tbody"></tbody>
                 </table></div>
             </div>
             <div class="card" style="margin-top:20px">
-                <div class="card-header"><h3 class="card-title">Payment History</h3></div>
+                <div class="card-header"><h3 class="card-title">Payment Voucher History</h3></div>
                 <div class="table-container"><table class="data-table">
-                    <thead><tr><th>Voucher</th><th>Date</th><th>Farmer</th><th>Purchase</th><th>Mode</th><th class="text-right">Amount</th><th>Account</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Voucher</th><th>Date</th><th>Farmer</th><th>Purchase #</th><th>Mode</th><th class="text-right">Amount Paid</th><th>Account</th><th>Actions</th></tr></thead>
                     <tbody id="pp-history-tbody"></tbody>
                 </table></div>
             </div>
@@ -428,21 +437,29 @@
         <!-- ===== SALE PAYMENTS ===== -->
         <div class="section" id="sec-sale-payments">
             <div class="page-header">
-                <div><h1 class="page-title">Buyer Payments</h1><p class="page-title-sub">Track payments from buyers</p></div>
-                <div class="page-actions"><button class="btn btn-ghost" onclick="SalePayments.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
+                <div><h1 class="page-title">Buyer Payments & Receipts</h1><p class="page-title-sub">Track and record receipts collected from buyers</p></div>
+                <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="SalePayments.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
+                    <button class="btn btn-primary" onclick="SalePayments.showDirectPaymentModal()"><i data-lucide="plus-circle"></i> General Buyer Receipt</button>
+                </div>
             </div>
+
+            <!-- Analytical Summary KPI Cards -->
+            <div class="stats-grid" id="sp-kpi-grid" style="margin-bottom:20px"></div>
+
             <div class="filter-bar">
-                <div class="search-input"><i data-lucide="search"></i><input id="sp-search" placeholder="Search..." oninput="SalePayments.render()"></div>
-                <select class="filter-select" id="sp-filter" onchange="SalePayments.render()"><option value="">All</option><option value="paid">Paid</option><option value="partial">Partial</option><option value="pending">Pending</option></select>
+                <div class="search-input"><i data-lucide="search"></i><input id="sp-search" placeholder="Search buyer, receipt ID..." oninput="SalePayments.render()"></div>
+                <select class="filter-select" id="sp-filter" onchange="SalePayments.render()"><option value="">All Status</option><option value="paid">Paid</option><option value="partial">Partial</option><option value="pending">Pending</option></select>
+                <select class="filter-select" id="sp-mode-filter" onchange="SalePayments.renderHistory()"><option value="">All Receipt Modes</option><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="cheque">Cheque</option><option value="online">Online</option></select>
             </div>
             <div class="card"><div class="table-container"><table class="data-table">
-                <thead><tr><th>Receipt ID</th><th>Date</th><th>Buyer</th><th>Crop</th><th class="text-right">Amount</th><th class="text-right">Received</th><th class="text-right">Balance</th><th>Status</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Receipt ID</th><th>Date</th><th>Buyer</th><th>Crop</th><th class="text-right">Sale Amount</th><th class="text-right">Received</th><th class="text-right">Balance</th><th>Status</th><th>Actions</th></tr></thead>
                 <tbody id="sp-tbody"></tbody>
             </table></div></div>
             <div class="card" style="margin-top:20px">
-                <div class="card-header"><h3 class="card-title">Receipt History</h3></div>
+                <div class="card-header"><h3 class="card-title">Receipt Voucher History</h3></div>
                 <div class="table-container"><table class="data-table">
-                    <thead><tr><th>Voucher</th><th>Date</th><th>Buyer</th><th>Sale</th><th>Mode</th><th class="text-right">Amount</th><th>Account</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Voucher</th><th>Date</th><th>Buyer</th><th>Sale #</th><th>Mode</th><th class="text-right">Amount Received</th><th>Account</th><th>Actions</th></tr></thead>
                     <tbody id="sp-history-tbody"></tbody>
                 </table></div>
             </div>
@@ -823,13 +840,52 @@
                     </table>
                 </div>
             </div>
+            <!-- Automated Backup, Security & Local Vault -->
+            <div class="card" style="margin-bottom:20px">
+                <div class="card-header">
+                    <h3 class="card-title"><i data-lucide="shield-check"></i> Encrypted Auto-Backup & Cloud Sync</h3>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px">
+                        <input type="checkbox" id="set-autobackup-enable" style="width:18px;height:18px;accent-color:var(--accent-primary)">
+                        <label for="set-autobackup-enable" class="form-label" style="margin:0;cursor:pointer">Enable Automated Background Backup</label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Auto-Backup Frequency</label>
+                        <select class="form-select" id="set-autobackup-freq">
+                            <option value="daily">Daily (Every 24 Hours)</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="manual">Manual Only</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">AES-256 Encryption Passphrase (Optional)</label>
+                        <input class="form-input" type="password" id="set-backup-pass" placeholder="Leave empty for unencrypted backup">
+                    </div>
+                </div>
+                <div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="BackupManager.saveSettingsFromForm()"><i data-lucide="save"></i> Save Security Settings</button>
+                    <button class="btn btn-success" onclick="BackupManager.exportToGoogleDrive()"><i data-lucide="cloud-upload"></i> Backup to Google Drive</button>
+                </div>
+
+                <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border-color)">
+                    <h4 class="crop-section-title" style="border:none;padding-top:0"><i data-lucide="hard-drive"></i> Local Backup Vault (Last 7 Snapshots)</h4>
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead><tr><th>Snapshot Date</th><th>Type</th><th>Security Status</th><th class="text-right">Record Count</th><th>Actions</th></tr></thead>
+                            <tbody id="backup-vault-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-header"><h3 class="card-title">Data Management</h3></div>
                 <div style="display:flex;gap:12px;flex-wrap:wrap">
                     <button class="btn btn-ghost" onclick="ExportUtils.allToExcel()"><i data-lucide="file-spreadsheet"></i> Full Excel Backup</button>
-                    <button class="btn btn-success" onclick="Settings.backup()"><i data-lucide="download"></i> Backup JSON File</button>
+                    <button class="btn btn-success" onclick="BackupManager.exportToFile()"><i data-lucide="download"></i> Backup JSON File</button>
                     <button class="btn btn-warning" onclick="document.getElementById('restore-file').click()"><i data-lucide="upload"></i> Restore JSON File</button>
-                    <input type="file" id="restore-file" accept=".json" style="display:none" onchange="Settings.restore(event)">
+                    <input type="file" id="restore-file" accept=".json,.agrisys" style="display:none" onchange="BackupManager.restoreFromFile(this.files[0])">
                     <button class="btn btn-danger" onclick="Settings.clearAll()"><i data-lucide="trash-2"></i> Clear All Data</button>
                 </div>
             </div>
@@ -890,17 +946,79 @@
     <div class="modal">
         <div class="modal-header"><h3 class="modal-title" id="pay-modal-title">Record Payment</h3><button class="modal-close" onclick="Utils.hideModal('payment-modal')">×</button></div>
         <div class="modal-body">
+            <!-- Open Advance Notification & Adjustment Box -->
+            <div id="pay-advance-box" style="display:none; margin-bottom: 16px; padding: 12px; background: rgba(234,179,8,0.1); border: 1px solid var(--accent-warning); border-radius: 8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <strong style="color:var(--accent-warning)"><i data-lucide="wallet"></i> Open Advance Available:</strong>
+                        <span id="pay-avail-advance" class="font-bold" style="font-size:16px; margin-left:6px;">PKR 0.00</span>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top:10px;">
+                    <label class="form-label">Adjust / Deduct Open Advance (PKR)</label>
+                    <input class="form-input" type="number" id="pay-deduct-advance" step="0.01" value="0" placeholder="0.00" oninput="PurchasePayments.calculateModalTotals ? PurchasePayments.calculateModalTotals() : (SalePayments.calculateModalTotals && SalePayments.calculateModalTotals())">
+                    <span class="form-hint">Settles open advance balance against this payment invoice.</span>
+                </div>
+            </div>
+
             <div class="form-grid">
                 <div class="form-group"><label class="form-label">Receipt No</label><input class="form-input" id="pay-receipt-id" readonly></div>
-                <div class="form-group"><label class="form-label">Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01"></div>
+                <div class="form-group"><label class="form-label">Total Payment Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01" oninput="PurchasePayments.calculateModalTotals ? PurchasePayments.calculateModalTotals() : (SalePayments.calculateModalTotals && SalePayments.calculateModalTotals())"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="pay-date"></div>
                 <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="pay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
                 <div class="form-group"><label class="form-label">Reference</label><input class="form-input" id="pay-ref" placeholder="Reference number..."></div>
                 <div class="form-group"><label class="form-label">Cash/Bank Account</label><select class="form-select" id="pay-account"></select></div>
                 <div class="form-group full-width"><label class="form-label">Notes</label><textarea class="form-textarea" id="pay-notes"></textarea></div>
             </div>
+
+            <div class="summary-box" style="margin-top:16px;">
+                <div class="summary-row"><span class="summary-label">Total Payment Amount</span><span class="summary-value" id="pay-sum-total">PKR 0.00</span></div>
+                <div class="summary-row" id="pay-sum-adv-row" style="display:none"><span class="summary-label">Adjusted From Open Advance</span><span class="summary-value" id="pay-sum-adv" style="color:var(--accent-warning)">- PKR 0.00</span></div>
+                <div class="summary-row"><span class="summary-label">Net Cash/Bank Payout/Receipt</span><span class="summary-value font-bold" id="pay-sum-net" style="color:var(--accent-success)">PKR 0.00</span></div>
+            </div>
         </div>
         <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('payment-modal')">Cancel</button><button class="btn btn-primary" id="pay-save-btn">Save Payment</button><button class="btn btn-success" id="pay-save-print-btn">Save & Print</button></div>
+    </div>
+</div>
+
+<!-- Direct Party Payment Modal -->
+<div class="modal-overlay" id="direct-pay-modal">
+    <div class="modal">
+        <div class="modal-header"><h3 class="modal-title" id="dpay-title">General Party Payment</h3><button class="modal-close" onclick="Utils.hideModal('direct-pay-modal')">×</button></div>
+        <div class="modal-body">
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label class="form-label" id="dpay-party-label">Select Party <span class="required">*</span></label>
+                    <input class="form-input" id="dpay-party-name" list="dpay-party-datalist" placeholder="Search farmer or buyer..." autocomplete="off" oninput="PurchasePayments.onDirectPartySelect ? PurchasePayments.onDirectPartySelect() : (SalePayments.onDirectPartySelect && SalePayments.onDirectPartySelect())">
+                    <datalist id="dpay-party-datalist"></datalist>
+                </div>
+            </div>
+
+            <!-- Party Balances Info Box -->
+            <div id="dpay-info-box" style="display:none; margin-top:12px; padding:12px; background:var(--bg-color); border:1px solid var(--border-color); border-radius:8px;">
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                    <div><span style="color:var(--text-muted); font-size:12px;">Total Pending Balance:</span><div class="font-bold" id="dpay-total-bal" style="font-size:16px;">PKR 0.00</div></div>
+                    <div><span style="color:var(--text-muted); font-size:12px;">Available Open Advance:</span><div class="font-bold" id="dpay-open-adv" style="color:var(--accent-warning); font-size:16px;">PKR 0.00</div></div>
+                </div>
+            </div>
+
+            <div class="form-grid" style="margin-top:16px;">
+                <div class="form-group"><label class="form-label">Receipt / Voucher No</label><input class="form-input" id="dpay-receipt-id" readonly></div>
+                <div class="form-group"><label class="form-label">Total Payment Amount (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="dpay-amount" step="0.01" placeholder="0.00" oninput="PurchasePayments.calculateDirectTotals ? PurchasePayments.calculateDirectTotals() : (SalePayments.calculateDirectTotals && SalePayments.calculateDirectTotals())"></div>
+                <div class="form-group"><label class="form-label">Adjust Open Advance (PKR)</label><input class="form-input" type="number" id="dpay-deduct-adv" step="0.01" value="0" placeholder="0.00" oninput="PurchasePayments.calculateDirectTotals ? PurchasePayments.calculateDirectTotals() : (SalePayments.calculateDirectTotals && SalePayments.calculateDirectTotals())"></div>
+                <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="dpay-date"></div>
+                <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="dpay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
+                <div class="form-group"><label class="form-label">Cash / Bank Account</label><select class="form-select" id="dpay-account"></select></div>
+                <div class="form-group full-width"><label class="form-label">Reference / Notes</label><input class="form-input" id="dpay-ref" placeholder="Notes or reference number..."></div>
+            </div>
+
+            <div class="summary-box" style="margin-top:16px;">
+                <div class="summary-row"><span class="summary-label">Total Payment / Settlement</span><span class="summary-value" id="dpay-sum-total">PKR 0.00</span></div>
+                <div class="summary-row" id="dpay-sum-adv-row" style="display:none"><span class="summary-label">Adjusted From Open Advance</span><span class="summary-value" id="dpay-sum-adv" style="color:var(--accent-warning)">- PKR 0.00</span></div>
+                <div class="summary-row"><span class="summary-label">Net Cash / Bank Amount</span><span class="summary-value font-bold" id="dpay-sum-net" style="color:var(--accent-success)">PKR 0.00</span></div>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('direct-pay-modal')">Cancel</button><button class="btn btn-primary" id="dpay-save-btn">Save Payment</button></div>
     </div>
 </div>
 
@@ -1095,6 +1213,7 @@
 <script src="js/season-manager.js"></script>
 <script src="js/operations.js"></script>
 <script src="js/crop-analysis.js"></script>
+<script src="js/backup-manager.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

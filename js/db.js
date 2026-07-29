@@ -3,7 +3,7 @@
 const DB = {
     db: null,
     DB_NAME: 'AgriSysDB',
-    DB_VERSION: 9,
+    DB_VERSION: 10,
 
     async init() {
         return new Promise((resolve, reject) => {
@@ -150,6 +150,12 @@ const DB = {
                 }
                 if (!db.objectStoreNames.contains('retained_earnings')) {
                     db.createObjectStore('retained_earnings', { keyPath: 'seasonId' });
+                }
+
+                // V10: Backup Vault store
+                if (!db.objectStoreNames.contains('backup_vault')) {
+                    const store = db.createObjectStore('backup_vault', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
                 }
             };
 
