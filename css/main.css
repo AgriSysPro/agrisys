@@ -1694,3 +1694,285 @@ kbd {
     .crop-filter-controls,
     .season-card { display: none; }
 }
+
+/* ===== Capital Account Cards ===== */
+.account-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 20px;
+    margin-bottom: 24px;
+}
+
+.account-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 0;
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition);
+    overflow: hidden;
+    position: relative;
+}
+
+.account-card:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-2px);
+}
+
+.account-card-top {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 20px 20px 0;
+}
+
+.account-card-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.account-card-icon.cash {
+    background: rgba(5, 150, 105, 0.1);
+    color: var(--accent-success);
+}
+
+.account-card-icon.bank {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--accent-primary);
+}
+
+.account-card-icon svg,
+.account-card-icon i {
+    width: 24px;
+    height: 24px;
+}
+
+.account-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.account-card-name {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.account-card-type {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 4px;
+}
+
+.account-card-type.cash {
+    background: rgba(5, 150, 105, 0.1);
+    color: var(--accent-success);
+}
+
+.account-card-type.bank {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--accent-primary);
+}
+
+.account-card-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.account-card-balance-section {
+    padding: 16px 20px;
+}
+
+.account-card-balance-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.account-card-balance-value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+    line-height: 1.2;
+}
+
+.account-card-balance-value.positive { color: var(--accent-success); }
+.account-card-balance-value.negative { color: var(--accent-danger); }
+
+.account-card-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--border-color);
+    border-top: 1px solid var(--border-color);
+}
+
+.account-card-stat {
+    background: var(--bg-card);
+    padding: 12px;
+    text-align: center;
+}
+
+.account-card-stat-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
+}
+
+.account-card-stat-value {
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+.account-card-sparkline {
+    padding: 0 20px 4px;
+    height: 44px;
+    display: flex;
+    align-items: flex-end;
+}
+
+.account-card-sparkline svg {
+    width: 100%;
+    height: 40px;
+}
+
+.account-card-details {
+    padding: 0 20px 12px;
+}
+
+.account-card-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 0.78rem;
+}
+
+.account-card-detail-row .detail-label {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.account-card-detail-row .detail-value {
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-align: right;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.account-card-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.account-card-empty i,
+.account-card-empty svg {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 12px;
+    opacity: 0.4;
+}
+
+/* ===== Transfer Arrow ===== */
+.transfer-direction {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 0;
+}
+
+.transfer-arrow {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--accent-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.transfer-arrow svg,
+.transfer-arrow i {
+    width: 20px;
+    height: 20px;
+}
+
+/* ===== Capital Transaction Filters ===== */
+.capital-filter-bar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.capital-filter-bar .filter-select,
+.capital-filter-bar .form-input {
+    padding: 8px 12px;
+    font-size: 0.82rem;
+    min-width: 0;
+}
+
+.capital-filter-bar .search-box {
+    flex: 1;
+    min-width: 160px;
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 0.82rem;
+    outline: none;
+    transition: var(--transition);
+}
+
+.capital-filter-bar .search-box:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+}
+
+/* ===== Account Card Responsive ===== */
+@media (max-width: 640px) {
+    .account-cards-grid {
+        grid-template-columns: 1fr;
+    }
+    .capital-filter-bar {
+        flex-direction: column;
+    }
+    .capital-filter-bar .search-box,
+    .capital-filter-bar .filter-select,
+    .capital-filter-bar .form-input {
+        width: 100%;
+    }
+}
