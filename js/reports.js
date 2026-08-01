@@ -79,6 +79,7 @@ const Reports = {
             advances: await fetchAllUpToEnd('farmer_advances'),
             capitalTxs: await fetchAllUpToEnd('capital_transactions'),
             accounts: await DB.getAll('capital_accounts'),
+            capitalEntries: await fetchAllUpToEnd('capital_entries'),
             openingBalances: await fetchAllUpToEnd('opening_balances'),
             stockAdjustments: adjustments
         };
@@ -300,10 +301,10 @@ const Reports = {
         const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
         const totalLiabilities = accountsPayable + buyerAdvances;
 
-        // Equity (IFRS compliant breakdown)
-        const ownerCapital = allAccs.reduce((s, a) => s + (a.openingBalance || 0), 0) +
-            allCapTx.filter(t => !t.sourceStore && t.type === 'deposit').reduce((s, t) => s + t.amount, 0) -
-            allCapTx.filter(t => !t.sourceStore && t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+        // Equity (from Capital Entries)
+        const capitalEntries = scoped.capitalEntries || [];
+        const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
+            capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
 
         const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
         const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
@@ -386,10 +387,10 @@ const Reports = {
         
         const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
-        // Financing Activities
-        const financingTxs = capitalTxs.filter(t => !t.sourceStore);
-        const capitalDeposits = financingTxs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
-        const capitalWithdrawals = financingTxs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+        // Financing Activities (from Capital Entries)
+        const capitalEntries = scoped.capitalEntries || [];
+        const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
+        const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
         const netFinancingCash = capitalDeposits - capitalWithdrawals;
 
         const netCashFlow = netOperatingCash + netFinancingCash;
@@ -900,9 +901,9 @@ const Reports = {
             const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
             const totalLiabilities = accountsPayable + buyerAdvances;
 
-            const ownerCapital = allAccs.reduce((s, a) => s + (a.openingBalance || 0), 0) +
-                allCapTx.filter(t => !t.sourceStore && t.type === 'deposit').reduce((s, t) => s + t.amount, 0) -
-                allCapTx.filter(t => !t.sourceStore && t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+            const capitalEntries = scoped.capitalEntries || [];
+            const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
+                capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
 
             const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
             const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
@@ -1026,9 +1027,9 @@ const Reports = {
             const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
             const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
-            const financingTxs = capitalTxs.filter(t => !t.sourceStore);
-            const capitalDeposits = financingTxs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
-            const capitalWithdrawals = financingTxs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+            const capitalEntries = scoped.capitalEntries || [];
+            const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
+            const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
             const netFinancingCash = capitalDeposits - capitalWithdrawals;
             const netCashFlow = netOperatingCash + netFinancingCash;
 
@@ -1160,9 +1161,9 @@ const Reports = {
         const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
         const totalLiabilities = accountsPayable + buyerAdvances;
 
-        const ownerCapital = allAccs.reduce((s, a) => s + (a.openingBalance || 0), 0) +
-            allCapTx.filter(t => !t.sourceStore && t.type === 'deposit').reduce((s, t) => s + t.amount, 0) -
-            allCapTx.filter(t => !t.sourceStore && t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+        const capitalEntries = scoped.capitalEntries || [];
+        const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
+            capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
 
         const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
         const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
@@ -1228,9 +1229,9 @@ const Reports = {
         const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
         const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
-        const financingTxs = capitalTxs.filter(t => !t.sourceStore);
-        const capitalDeposits = financingTxs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
-        const capitalWithdrawals = financingTxs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+        const capitalEntries = scoped.capitalEntries || [];
+        const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
+        const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
         const netFinancingCash = capitalDeposits - capitalWithdrawals;
         const netCashFlow = netOperatingCash + netFinancingCash;
 

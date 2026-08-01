@@ -119,7 +119,8 @@ const App = {
             case 'opening-balances': await OpeningBalances.render(); break;
             case 'stock-adjustments': await StockAdjustments.render(); break;
             case 'inventory-lots': await InventoryLots.render(); break;
-            case 'capital': await Capital.render(); break;
+            case 'bank-accounts': await BankAccounts.render(); break;
+            case 'capital-mgmt': await CapitalMgmt.render(); break;
             case 'bookkeeping': await Bookkeeping.render(); break;
             case 'cash-book': await FinanceReports.renderCashBook(); break;
             case 'trial-balance': await FinanceReports.renderTrialBalance(); break;

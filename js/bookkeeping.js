@@ -82,13 +82,15 @@ const Bookkeeping = {
             }
         });
 
-        capitalTxs.filter(t => !t.sourceStore).forEach(t => {
-            if (t.type === 'deposit') {
-                entries.push({ date: t.date, description: t.description || 'Capital deposit', account: 'Cash / Bank', debit: t.amount, credit: 0, type: 'capital' });
-                entries.push({ date: t.date, description: t.description || 'Capital deposit', account: 'Owner Capital', debit: 0, credit: t.amount, type: 'capital' });
+        // ── Capital entries (from capital_entries store) ──
+        const capitalEntries = Utils.filterBySeason(await DB.getAll('capital_entries'), activeSeason);
+        capitalEntries.forEach(e => {
+            if (e.type === 'contribution') {
+                entries.push({ date: e.date, description: e.description || 'Capital contribution', account: 'Cash / Bank', debit: e.amount, credit: 0, type: 'capital' });
+                entries.push({ date: e.date, description: e.description || 'Capital contribution', account: 'Owner Capital', debit: 0, credit: e.amount, type: 'capital' });
             } else {
-                entries.push({ date: t.date, description: t.description || 'Capital withdrawal', account: 'Owner Drawings', debit: t.amount, credit: 0, type: 'capital' });
-                entries.push({ date: t.date, description: t.description || 'Capital withdrawal', account: 'Cash / Bank', debit: 0, credit: t.amount, type: 'capital' });
+                entries.push({ date: e.date, description: e.description || 'Owner drawing', account: 'Owner Drawings', debit: e.amount, credit: 0, type: 'capital' });
+                entries.push({ date: e.date, description: e.description || 'Owner drawing', account: 'Cash / Bank', debit: 0, credit: e.amount, type: 'capital' });
             }
         });
 

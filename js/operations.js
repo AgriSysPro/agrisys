@@ -691,7 +691,7 @@ const FinanceReports = {
             <td class="text-right">${r.deposit ? 'PKR ' + Utils.formatPKR(r.deposit) : ''}</td>
             <td class="text-right">${r.withdrawal ? 'PKR ' + Utils.formatPKR(r.withdrawal) : ''}</td>
             <td class="text-right font-bold">PKR ${Utils.formatPKR(r.balance)}</td>
-            <td>${r.id ? `<button class="btn btn-sm ${r.isReconciled ? 'btn-success' : 'btn-ghost'}" onclick="Capital.toggleReconciled('${r.id}', ${!r.isReconciled}).then(()=>FinanceReports.renderCashBook())">${r.isReconciled ? '✅ Reconciled' : '⏳ Pending'}</button>` : '-'}</td>
+            <td>${r.id ? `<button class="btn btn-sm ${r.isReconciled ? 'btn-success' : 'btn-ghost'}" onclick="BankAccounts.toggleReconciled('${r.id}', ${!r.isReconciled}).then(()=>FinanceReports.renderCashBook())">${r.isReconciled ? '✅ Reconciled' : '⏳ Pending'}</button>` : '-'}</td>
         </tr>`).join('') || '<tr><td colspan="7" class="text-center" style="color:var(--text-muted)">No cash book rows</td></tr>';
         this.cashBookRows = rows;
     },

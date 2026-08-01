@@ -74,8 +74,11 @@
             <div class="nav-item" data-section="inventory-lots" onclick="App.navigate('inventory-lots')">
                 <i data-lucide="boxes"></i> Inventory Lots
             </div>
-            <div class="nav-item" data-section="capital" onclick="App.navigate('capital')">
-                <i data-lucide="landmark"></i> Capital
+            <div class="nav-item" data-section="capital-mgmt" onclick="App.navigate('capital-mgmt')">
+                <i data-lucide="coins"></i> Capital
+            </div>
+            <div class="nav-item" data-section="bank-accounts" onclick="App.navigate('bank-accounts')">
+                <i data-lucide="landmark"></i> Bank Accounts
             </div>
             <div class="nav-item" data-section="bookkeeping" onclick="App.navigate('bookkeeping')">
                 <i data-lucide="book-open"></i> Bookkeeping
@@ -560,37 +563,57 @@
             </div>
         </div>
 
-        <!-- ===== CAPITAL ===== -->
-        <div class="section" id="sec-capital">
+        <!-- ===== BANK ACCOUNTS ===== -->
+        <div class="section" id="sec-bank-accounts">
             <div class="page-header">
-                <div><h1 class="page-title">Capital & Accounts</h1><p class="page-title-sub">Track invested capital, bank accounts, and balances</p></div>
+                <div><h1 class="page-title">Bank Accounts</h1><p class="page-title-sub">Manage cash and bank account balances</p></div>
                 <div class="page-actions">
-                    <button class="btn btn-ghost" onclick="Capital.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
-                    <button class="btn btn-ghost" onclick="Capital.showStatementModal()"><i data-lucide="file-text"></i> PDF Statement</button>
-                    <button class="btn btn-ghost" onclick="Capital.showReconModal()"><i data-lucide="check-square"></i> Bank Recon</button>
-                    <button class="btn btn-warning" onclick="Capital.showTransferModal()"><i data-lucide="arrow-left-right"></i> Transfer</button>
-                    <button class="btn btn-primary" onclick="Capital.showAddAccount()"><i data-lucide="plus"></i> Add Account</button>
+                    <button class="btn btn-ghost" onclick="BankAccounts.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
+                    <button class="btn btn-ghost" onclick="BankAccounts.showStatementModal()"><i data-lucide="file-text"></i> PDF Statement</button>
+                    <button class="btn btn-ghost" onclick="BankAccounts.showReconModal()"><i data-lucide="check-square"></i> Bank Recon</button>
+                    <button class="btn btn-warning" onclick="BankAccounts.showTransferModal()"><i data-lucide="arrow-left-right"></i> Transfer</button>
+                    <button class="btn btn-primary" onclick="BankAccounts.showAddAccount()"><i data-lucide="plus"></i> Add Account</button>
                 </div>
             </div>
             <div class="stats-grid" id="capital-stats"></div>
             <div class="account-cards-grid" id="capital-account-cards"></div>
             <div class="card">
-                <div class="card-header"><h3 class="card-title">Transactions</h3><button class="btn btn-ghost btn-sm" onclick="Capital.showAddTransaction()"><i data-lucide="plus"></i> Add Transaction</button></div>
+                <div class="card-header"><h3 class="card-title">Transactions</h3><button class="btn btn-ghost btn-sm" onclick="BankAccounts.showAddTransaction()"><i data-lucide="plus"></i> Add Transaction</button></div>
                 <div class="capital-filter-bar">
-                    <select class="filter-select" id="cap-tx-account" onchange="Capital.renderTransactions()"><option value="">All Accounts</option></select>
-                    <select class="filter-select" id="cap-tx-type" onchange="Capital.renderTransactions()">
+                    <select class="filter-select" id="cap-tx-account" onchange="BankAccounts.renderTransactions()"><option value="">All Accounts</option></select>
+                    <select class="filter-select" id="cap-tx-type" onchange="BankAccounts.renderTransactions()">
                         <option value="">All Types</option>
                         <option value="deposit">Deposit</option>
                         <option value="withdrawal">Withdrawal</option>
                         <option value="transfer">Transfer</option>
                     </select>
-                    <input class="form-input" type="date" id="cap-tx-from" onchange="Capital.renderTransactions()">
-                    <input class="form-input" type="date" id="cap-tx-to" onchange="Capital.renderTransactions()">
-                    <input class="search-box" type="text" id="cap-tx-search" placeholder="Search description..." oninput="Capital.renderTransactions()">
+                    <input class="form-input" type="date" id="cap-tx-from" onchange="BankAccounts.renderTransactions()">
+                    <input class="form-input" type="date" id="cap-tx-to" onchange="BankAccounts.renderTransactions()">
+                    <input class="search-box" type="text" id="cap-tx-search" placeholder="Search description..." oninput="BankAccounts.renderTransactions()">
                 </div>
                 <div class="table-container"><table class="data-table">
                     <thead><tr><th>Date</th><th>Account</th><th>Type</th><th>Description</th><th class="text-right">Amount</th><th class="text-right">Balance</th><th>Recon</th><th>Actions</th></tr></thead>
                     <tbody id="capital-tx-tbody"></tbody>
+                </table></div>
+            </div>
+        </div>
+
+        <!-- ===== CAPITAL MANAGEMENT ===== -->
+        <div class="section" id="sec-capital-mgmt">
+            <div class="page-header">
+                <div><h1 class="page-title">Capital</h1><p class="page-title-sub">Define invested capital, contributions, and owner drawings</p></div>
+                <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="CapitalMgmt.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
+                    <button class="btn btn-success" onclick="CapitalMgmt.showAddEntry('contribution')"><i data-lucide="plus-circle"></i> Add Contribution</button>
+                    <button class="btn btn-warning" onclick="CapitalMgmt.showAddEntry('drawing')"><i data-lucide="minus-circle"></i> Record Drawing</button>
+                </div>
+            </div>
+            <div class="stats-grid" id="capital-mgmt-stats"></div>
+            <div class="card">
+                <div class="card-header"><h3 class="card-title">Capital Ledger</h3></div>
+                <div class="table-container"><table class="data-table">
+                    <thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Bank Account</th><th class="text-right">Amount</th><th class="text-right">Running Balance</th><th>Actions</th></tr></thead>
+                    <tbody id="capital-mgmt-tbody"></tbody>
                 </table></div>
             </div>
         </div>
@@ -1118,7 +1141,7 @@
             <input type="hidden" id="acc-edit-id">
             <div class="form-grid">
                 <div class="form-group"><label class="form-label">Account Name <span class="required">*</span></label><input class="form-input" id="acc-name" placeholder="e.g. Cash, HBL Account"></div>
-                <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="acc-type" onchange="Capital.toggleBankFields()"><option value="cash">Cash</option><option value="bank">Bank Account</option></select></div>
+                <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="acc-type" onchange="BankAccounts.toggleBankFields()"><option value="cash">Cash</option><option value="bank">Bank Account</option></select></div>
                 <div class="form-group"><label class="form-label">Opening Balance (PKR)</label><input class="form-input" type="number" id="acc-balance" step="0.01" value="0"></div>
             </div>
             <div id="bank-details-section" style="display:none; margin-top: 16px;">
@@ -1131,7 +1154,7 @@
                 </div>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('account-modal')">Cancel</button><button class="btn btn-primary" onclick="Capital.saveAccount()">Save</button></div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('account-modal')">Cancel</button><button class="btn btn-primary" onclick="BankAccounts.saveAccount()">Save</button></div>
     </div>
 </div>
 
@@ -1148,7 +1171,7 @@
                 <div class="form-group full-width"><label class="form-label">Description</label><input class="form-input" id="tx-desc"></div>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('tx-modal')">Cancel</button><button class="btn btn-primary" onclick="Capital.saveTransaction()">Save</button></div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('tx-modal')">Cancel</button><button class="btn btn-primary" onclick="BankAccounts.saveTransaction()">Save</button></div>
     </div>
 </div>
 
@@ -1168,7 +1191,7 @@
                 <div class="form-group full-width"><label class="form-label">Description</label><input class="form-input" id="xfer-desc" placeholder="e.g. Cash deposit to bank"></div>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('transfer-modal')">Cancel</button><button class="btn btn-primary" onclick="Capital.saveTransfer()"><i data-lucide="arrow-left-right"></i> Transfer</button></div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('transfer-modal')">Cancel</button><button class="btn btn-primary" onclick="BankAccounts.saveTransfer()"><i data-lucide="arrow-left-right"></i> Transfer</button></div>
     </div>
 </div>
 
@@ -1183,7 +1206,24 @@
                 <div class="form-group"><label class="form-label">To Date</label><input class="form-input" type="date" id="stmt-to"></div>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('statement-modal')">Cancel</button><button class="btn btn-primary" onclick="Capital.generateStatement()"><i data-lucide="file-text"></i> Generate PDF</button></div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('statement-modal')">Cancel</button><button class="btn btn-primary" onclick="BankAccounts.generateStatement()"><i data-lucide="file-text"></i> Generate PDF</button></div>
+    </div>
+</div>
+
+<!-- Capital Entry Modal (Contribution/Drawing) -->
+<div class="modal-overlay" id="capital-entry-modal">
+    <div class="modal">
+        <div class="modal-header"><h3 class="modal-title" id="cap-entry-title">Add Capital Contribution</h3><button class="modal-close" onclick="Utils.hideModal('capital-entry-modal')">×</button></div>
+        <div class="modal-body">
+            <input type="hidden" id="cap-entry-type" value="contribution">
+            <div class="form-grid">
+                <div class="form-group"><label class="form-label">Amount (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="cap-entry-amount" step="0.01" placeholder="0.00"></div>
+                <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="cap-entry-date"></div>
+                <div class="form-group full-width"><label class="form-label">Description</label><input class="form-input" id="cap-entry-desc" placeholder="e.g. Initial investment, Monthly contribution"></div>
+                <div class="form-group full-width"><label class="form-label">Link to Bank/Cash Account <span style="color:var(--text-muted);font-weight:normal">(optional — creates matching bank transaction)</span></label><select class="form-select" id="cap-entry-account"></select></div>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('capital-entry-modal')">Cancel</button><button class="btn btn-primary" onclick="CapitalMgmt.saveEntry()">Save</button></div>
     </div>
 </div>
 
@@ -1231,7 +1271,7 @@
         <div class="modal-body">
             <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Select Account</label>
-                <select class="form-select" id="recon-account" onchange="Capital.renderReconList()"></select>
+                <select class="form-select" id="recon-account" onchange="BankAccounts.renderReconList()"></select>
             </div>
             <div class="table-container" style="max-height: 400px; overflow-y: auto;">
                 <table class="data-table">
@@ -1243,7 +1283,7 @@
                 <p>All items reconciled or no transactions found.</p>
             </div>
         </div>
-        <div class="modal-footer"><button class="btn btn-primary" onclick="Utils.hideModal('recon-modal'); Capital.render();">Done</button></div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="Utils.hideModal('recon-modal'); BankAccounts.render();">Done</button></div>
     </div>
 </div>
 
@@ -1259,6 +1299,7 @@
 <script src="js/payment-sales.js"></script>
 <script src="js/expenses.js"></script>
 <script src="js/capital.js"></script>
+<script src="js/capital-mgmt.js"></script>
 <script src="js/bookkeeping.js"></script>
 <script src="js/reports.js"></script>
 <script src="js/pdf.js"></script>

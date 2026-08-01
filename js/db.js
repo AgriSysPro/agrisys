@@ -3,7 +3,7 @@
 const DB = {
     db: null,
     DB_NAME: 'AgriSysDB',
-    DB_VERSION: 10,
+    DB_VERSION: 11,
 
     async init() {
         return new Promise((resolve, reject) => {
@@ -156,6 +156,13 @@ const DB = {
                 if (!db.objectStoreNames.contains('backup_vault')) {
                     const store = db.createObjectStore('backup_vault', { keyPath: 'id' });
                     store.createIndex('date', 'date');
+                }
+
+                // V11: Capital Entries store (owner capital contributions & drawings)
+                if (!db.objectStoreNames.contains('capital_entries')) {
+                    const store = db.createObjectStore('capital_entries', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('type', 'type');
                 }
             };
 
@@ -343,7 +350,7 @@ const DB = {
 
     // Backup all data
     async exportAll() {
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
         const data = {};
         for (const s of stores) {
             data[s] = await this.getAll(s);
@@ -359,7 +366,7 @@ const DB = {
             throw new Error('Invalid backup file payload');
         }
 
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
         
         // Validate store structures before clearing
         for (const s of stores) {

@@ -1,5 +1,5 @@
-// ===== Capital Module — Enhanced =====
-const Capital = {
+// ===== Bank Accounts Module =====
+const BankAccounts = {
     async render() {
         await this.renderStats();
         await this.renderAccounts();
@@ -77,8 +77,8 @@ const Capital = {
                         <div class="account-card-type ${typeClass}">${isCash ? '💵 Cash' : '🏦 Bank'}</div>
                     </div>
                     <div class="account-card-actions">
-                        <button class="btn btn-icon btn-ghost btn-sm" title="Edit" onclick="Capital.showEditAccount('${a.id}')">✏️</button>
-                        <button class="btn btn-icon btn-danger btn-sm" title="Delete" onclick="Capital.deleteAccount('${a.id}')">🗑️</button>
+                        <button class="btn btn-icon btn-ghost btn-sm" title="Edit" onclick="BankAccounts.showEditAccount('${a.id}')">✏️</button>
+                        <button class="btn btn-icon btn-danger btn-sm" title="Delete" onclick="BankAccounts.deleteAccount('${a.id}')">🗑️</button>
                     </div>
                 </div>
                 <div class="account-card-balance-section">
@@ -205,7 +205,7 @@ const Capital = {
                 <td class="text-right font-bold" style="color:${t.type === 'deposit' ? 'var(--accent-success)' : 'var(--accent-danger)'}">${t.type === 'deposit' ? '+' : '−'}PKR ${Utils.formatPKR(t.amount)}</td>
                 <td class="text-right font-bold" style="color:${runBalance >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(runBalance)}</td>
                 <td class="text-center">${t.isReconciled ? '✅' : '<span style="color:var(--text-muted);font-size:0.8rem">Pending</span>'}</td>
-                <td><button class="btn btn-icon btn-danger btn-sm" onclick="Capital.deleteTx('${t.id}')">🗑️</button></td>
+                <td><button class="btn btn-icon btn-danger btn-sm" onclick="BankAccounts.deleteTx('${t.id}')">🗑️</button></td>
             </tr>`;
         });
         // Show newest first
@@ -251,7 +251,7 @@ const Capital = {
                 <td>${Utils.escapeHTML(t.description || '-')}</td>
                 <td class="text-right font-bold">${t.type === 'deposit' ? '+' : '-'}PKR ${Utils.formatPKR(t.amount)}</td>
                 <td class="text-center">
-                    <input type="checkbox" ${checked} onchange="Capital.toggleReconciled('${t.id}', this.checked)" style="transform: scale(1.5);">
+                    <input type="checkbox" ${checked} onchange="BankAccounts.toggleReconciled('${t.id}', this.checked)" style="transform: scale(1.5);">
                 </td>
             </tr>`;
         }).join('');
