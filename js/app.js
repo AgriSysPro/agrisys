@@ -5,6 +5,9 @@ const App = {
     async init() {
         try {
             await DB.init();
+            if (typeof CoreServices !== 'undefined') {
+                await CoreServices.runMaterializedViewMigrations();
+            }
             const hasBusiness = await Settings.init();
             
             // Check for first-time visit
@@ -22,6 +25,7 @@ const App = {
             await this.populateExpenseTypeSelect();
             this.setupHashRouter();
             this.setupKeyboardShortcuts();
+            this.setupSyncListener();
             Utils.safeCreateIcons();
 
             // Load section modules
@@ -121,6 +125,8 @@ const App = {
             case 'inventory-lots': await InventoryLots.render(); break;
             case 'bank-accounts': await BankAccounts.render(); break;
             case 'capital-mgmt': await CapitalMgmt.render(); break;
+            case 'partners-mgmt': await PartnersMgmt.render(); break;
+            case 'debts-mgmt': await DebtsMgmt.render(); break;
             case 'bookkeeping': await Bookkeeping.render(); break;
             case 'cash-book': await FinanceReports.renderCashBook(); break;
             case 'trial-balance': await FinanceReports.renderTrialBalance(); break;
@@ -140,6 +146,18 @@ const App = {
             const hash = location.hash.replace('#', '') || 'dashboard';
             this.navigate(hash);
         });
+    },
+
+    setupSyncListener() {
+        if (typeof BroadcastChannel !== 'undefined') {
+            this.syncChannel = new BroadcastChannel('agrisys_db_sync');
+            this.syncChannel.onmessage = (event) => {
+                if (event.data && event.data.type === 'STORE_UPDATED') {
+                    // Refresh current view when another tab changes DB
+                    this.onSectionLoad(this.currentSection);
+                }
+            };
+        }
     },
 
     setupKeyboardShortcuts() {
@@ -254,11 +272,11 @@ const App = {
         const stockPurchases = adjustedStock.purchases;
         const stockSales = adjustedStock.sales;
 
-        const totalPurchaseAmt = purchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
-        const totalPaid = purchases.reduce((s, p) => s + (p.amountPaid || 0), 0);
-        const totalSaleAmt = sales.reduce((s, p) => s + (p.amount || 0), 0);
-        const totalReceived = sales.reduce((s, p) => s + (p.amountReceived || 0), 0);
-        const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+        const totalPurchaseAmt = Utils.sumBy(purchases, p => p.netPayableAmount || p.amount || 0);
+        const totalPaid = Utils.sumBy(purchases, 'amountPaid');
+        const totalSaleAmt = Utils.sumBy(sales, 'amount');
+        const totalReceived = Utils.sumBy(sales, 'amountReceived');
+        const totalExpenses = Utils.sumBy(expenses, 'amount');
         const today = Utils.todayISO();
         const overduePurchases = purchases.filter(p => p.paymentStatus !== 'paid' && p.dueDate && p.dueDate < today);
         const overdueSales = sales.filter(s => s.paymentStatus !== 'paid' && s.dueDate && s.dueDate < today);
@@ -273,8 +291,8 @@ const App = {
         let cashBankTotal = 0;
         allAccounts.forEach(a => {
             const txs = allBankTxs.filter(t => t.accountId === a.id);
-            const dep = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
-            const wdr = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+            const dep = Utils.sumBy(txs.filter(t => t.type === 'deposit'), 'amount');
+            const wdr = Utils.sumBy(txs.filter(t => t.type === 'withdrawal'), 'amount');
             cashBankTotal += (a.openingBalance || 0) + dep - wdr;
         });
 
@@ -284,6 +302,24 @@ const App = {
             const capSummary = await CapitalMgmt.getCapitalSummary();
             netCapital = capSummary.netCapital || 0;
             totalContributions = capSummary.totalContributions || 0;
+        }
+
+        let netDebtsReceivable = 0;
+        let activeDebtorsCount = 0;
+        if (typeof DebtsMgmt !== 'undefined' && typeof DebtsMgmt.getDebtsSummary === 'function') {
+            const debtsSummary = await DebtsMgmt.getDebtsSummary();
+            netDebtsReceivable = debtsSummary.netReceivable || 0;
+            activeDebtorsCount = debtsSummary.activeDebtorsCount || 0;
+        }
+
+        let partnersCount = 0;
+        let netPartnersEquity = 0;
+        let totalAllocatedProfit = 0;
+        if (typeof PartnersMgmt !== 'undefined' && typeof PartnersMgmt.getPartnersSummary === 'function') {
+            const partSummary = await PartnersMgmt.getPartnersSummary();
+            partnersCount = (partSummary.partners || []).length;
+            totalAllocatedProfit = partSummary.totalAllocatedProfit || 0;
+            netPartnersEquity = (partSummary.totalContributions || 0) + totalAllocatedProfit - (partSummary.totalDrawings || 0) - (partSummary.totalProfitPayouts || 0);
         }
 
         document.getElementById('dashboard-stats').innerHTML = `
@@ -311,12 +347,12 @@ const App = {
             <div class="stat-card orange">
                 <div class="stat-label">Overdue Buyers</div>
                 <div class="stat-value">${overdueSales.length}</div>
-                <div class="stat-sub">PKR ${Utils.formatPKR(overdueSales.reduce((s, x) => s + ((x.amount || 0) - (x.amountReceived || 0)), 0))}</div>
+                <div class="stat-sub">PKR ${Utils.formatPKR(Utils.sumBy(overdueSales, x => (x.amount || 0) - (x.amountReceived || 0)))}</div>
             </div>
             <div class="stat-card blue">
                 <div class="stat-label">Overdue Farmers</div>
                 <div class="stat-value">${overduePurchases.length}</div>
-                <div class="stat-sub">PKR ${Utils.formatPKR(overduePurchases.reduce((s, x) => s + ((x.netPayableAmount || x.amount || 0) - (x.amountPaid || 0)), 0))}</div>
+                <div class="stat-sub">PKR ${Utils.formatPKR(Utils.sumBy(overduePurchases, x => (x.netPayableAmount || x.amount || 0) - (x.amountPaid || 0)))}</div>
             </div>
             <div class="stat-card green" style="cursor:pointer" onclick="App.navigate('bank-accounts')">
                 <div class="stat-label">Cash & Bank Balances</div>
@@ -327,6 +363,16 @@ const App = {
                 <div class="stat-label">Net Owner Capital</div>
                 <div class="stat-value">PKR ${Utils.formatPKR(netCapital)}</div>
                 <div class="stat-sub">Total Invested: PKR ${Utils.formatPKR(totalContributions)} · Click to view</div>
+            </div>
+            <div class="stat-card orange" style="cursor:pointer" onclick="App.navigate('debts-mgmt')">
+                <div class="stat-label">Debts & Loans Receivable</div>
+                <div class="stat-value">PKR ${Utils.formatPKR(netDebtsReceivable)}</div>
+                <div class="stat-sub">${activeDebtorsCount} borrower${activeDebtorsCount === 1 ? '' : 's'} · Interest-Free · Click to view</div>
+            </div>
+            <div class="stat-card blue" style="cursor:pointer" onclick="App.navigate('partners-mgmt')">
+                <div class="stat-label">Partners & Profit Share</div>
+                <div class="stat-value">${partnersCount} Partner${partnersCount === 1 ? '' : 's'}</div>
+                <div class="stat-sub">Net Equity: PKR ${Utils.formatPKR(netPartnersEquity)} · Click to view</div>
             </div>
         `;
 
@@ -423,9 +469,9 @@ const App = {
             const month = String(d.getMonth() + 1).padStart(2, '0');
             const key = `${year}-${month}`;
             const label = d.toLocaleString('en', { month: 'short' });
-            const rev = sales.filter(s => s.date && s.date.startsWith(key)).reduce((s, x) => s + (x.amount || 0), 0);
-            const cost = purchases.filter(p => p.date && p.date.startsWith(key)).reduce((s, x) => s + Utils.purchaseCostAmount(x), 0);
-            const exp = expenses.filter(e => e.date && e.date.startsWith(key)).reduce((s, x) => s + (x.amount || 0), 0);
+            const rev = Utils.sumBy(sales.filter(s => s.date && s.date.startsWith(key)), 'amount');
+            const cost = Utils.sumBy(purchases.filter(p => p.date && p.date.startsWith(key)), x => Utils.purchaseCostAmount(x));
+            const exp = Utils.sumBy(expenses.filter(e => e.date && e.date.startsWith(key)), 'amount');
             months.push({ label, rev, cost, exp, profit: rev - cost - exp });
         }
 

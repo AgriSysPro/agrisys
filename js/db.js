@@ -3,7 +3,14 @@
 const DB = {
     db: null,
     DB_NAME: 'AgriSysDB',
-    DB_VERSION: 11,
+    DB_VERSION: 14,
+    channel: typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('agrisys_db_sync') : null,
+
+    broadcastUpdate(stores) {
+        if (this.channel) {
+            this.channel.postMessage({ type: 'STORE_UPDATED', stores: Array.isArray(stores) ? stores : [stores] });
+        }
+    },
 
     async init() {
         return new Promise((resolve, reject) => {
@@ -164,6 +171,37 @@ const DB = {
                     store.createIndex('date', 'date');
                     store.createIndex('type', 'type');
                 }
+
+                // V12: Company Debts store (interest-free company debts and loans given to any party & recoveries)
+                if (!db.objectStoreNames.contains('company_debts')) {
+                    const store = db.createObjectStore('company_debts', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('personName', 'personName');
+                    store.createIndex('type', 'type');
+                }
+
+                // V13: Partners & Partner Transactions stores (partnership profiles, profit sharing % & payouts)
+                if (!db.objectStoreNames.contains('partners')) {
+                    const store = db.createObjectStore('partners', { keyPath: 'id' });
+                    store.createIndex('name', 'name');
+                }
+                if (!db.objectStoreNames.contains('partner_transactions')) {
+                    const store = db.createObjectStore('partner_transactions', { keyPath: 'id' });
+                    store.createIndex('date', 'date');
+                    store.createIndex('partnerId', 'partnerId');
+                    store.createIndex('type', 'type');
+                }
+
+                // V14: Materialized Views (Performance optimization)
+                if (!db.objectStoreNames.contains('warehouse_stock')) {
+                    const store = db.createObjectStore('warehouse_stock', { keyPath: 'crop' });
+                    store.createIndex('crop', 'crop');
+                }
+                if (!db.objectStoreNames.contains('party_running_balances')) {
+                    const store = db.createObjectStore('party_running_balances', { keyPath: 'id' }); // id can be 'type_partyName'
+                    store.createIndex('partyName', 'partyName');
+                    store.createIndex('type', 'type'); // 'farmer' or 'buyer'
+                }
             };
 
             request.onsuccess = (e) => { this.db = e.target.result; resolve(); };
@@ -204,7 +242,10 @@ const DB = {
             const tx = this.db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
             const req = store.put(data);
-            req.onsuccess = () => resolve(req.result);
+            req.onsuccess = () => {
+                this.broadcastUpdate(storeName);
+                resolve(req.result);
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -224,7 +265,10 @@ const DB = {
             const tx = this.db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
             const req = store.delete(key);
-            req.onsuccess = () => resolve();
+            req.onsuccess = () => {
+                this.broadcastUpdate(storeName);
+                resolve();
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -274,7 +318,10 @@ const DB = {
             const tx = this.db.transaction(storeName, 'readwrite');
             const store = tx.objectStore(storeName);
             const req = store.clear();
-            req.onsuccess = () => resolve();
+            req.onsuccess = () => {
+                this.broadcastUpdate(storeName);
+                resolve();
+            };
             req.onerror = () => reject(req.error);
         });
     },
@@ -296,7 +343,10 @@ const DB = {
 
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction(storeNames, 'readwrite');
-            tx.oncomplete = () => resolve(true);
+            tx.oncomplete = () => {
+                this.broadcastUpdate(storeNames);
+                resolve(true);
+            };
             tx.onerror = (e) => reject(e.target.error);
             tx.onabort = () => reject(new Error('Unit of work transaction aborted'));
 
@@ -350,7 +400,7 @@ const DB = {
 
     // Backup all data
     async exportAll() {
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'company_debts', 'partners', 'partner_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
         const data = {};
         for (const s of stores) {
             data[s] = await this.getAll(s);
@@ -366,7 +416,7 @@ const DB = {
             throw new Error('Invalid backup file payload');
         }
 
-        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
+        const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'company_debts', 'partners', 'partner_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
         
         // Validate store structures before clearing
         for (const s of stores) {
@@ -381,7 +431,10 @@ const DB = {
             if (!activeStores.length) return resolve(false);
 
             const tx = this.db.transaction(activeStores, 'readwrite');
-            tx.oncomplete = () => resolve(true);
+            tx.oncomplete = () => {
+                this.broadcastUpdate(activeStores);
+                resolve(true);
+            };
             tx.onerror = (e) => reject(new Error('Atomic import failed and was rolled back: ' + e.target.error));
 
             activeStores.forEach(s => {

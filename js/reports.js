@@ -80,6 +80,9 @@ const Reports = {
             capitalTxs: await fetchAllUpToEnd('capital_transactions'),
             accounts: await DB.getAll('capital_accounts'),
             capitalEntries: await fetchAllUpToEnd('capital_entries'),
+            companyDebts: await fetchAllUpToEnd('company_debts'),
+            partners: await DB.getAll('partners'),
+            partnerTxs: await fetchAllUpToEnd('partner_transactions'),
             openingBalances: await fetchAllUpToEnd('opening_balances'),
             stockAdjustments: adjustments
         };
@@ -269,11 +272,18 @@ const Reports = {
         const openingReceipts = allOpeningPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
         const accountsReceivable = totalSalesRevenue - totalSalesReceived + openingReceivable - openingReceipts;
 
-        // 2. Farmer Advances (Subtract Recovered Advances)
+        // 2. Farmer Advances (Subtract Recovered and Adjusted Advances)
+        const allPurchasePayments = this.until(scoped.purchasePayments || [], toDate);
         const openingFarmerAdvances = allOpenings.filter(o => o.type === 'farmer_advance').reduce((s, o) => s + (o.amount || 0), 0);
-        const givenAdvances = allAdvances.reduce((s, a) => s + (a.amount || 0), 0);
+        const givenAdvances = allAdvances.filter(a => (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
         const recoveredAdvances = allPurchases.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-        const farmerAdvances = Math.max(0, openingFarmerAdvances + givenAdvances - recoveredAdvances);
+        const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+        const farmerAdvances = Math.max(0, openingFarmerAdvances + givenAdvances - recoveredAdvances - adjustedAdvances);
+        
+        const allDebts = this.until(scoped.companyDebts || [], toDate);
+        const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+        const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid);
         
         // 3. Cash & Bank
         let totalCashBank = 0;
@@ -289,7 +299,7 @@ const Reports = {
         const inventoryMetrics = Utils.calculateInventoryLots(allPurchases, allSales, allExpenses);
         const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
 
-        const totalAssets = accountsReceivable + farmerAdvances + totalCashBank + inventoryValue;
+        const totalAssets = accountsReceivable + farmerAdvances + debtsReceivable + totalCashBank + inventoryValue;
 
         // Liabilities
         // Accounts Payable
@@ -315,7 +325,13 @@ const Reports = {
         const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
         const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
         const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo;
-        const netEquity = ownerCapital + retainedEarnings;
+        
+        const partnerTxs = this.until(scoped.partnerTxs || [], toDate);
+        const partnerCapital = partnerTxs.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
+            partnerTxs.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) -
+            partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0);
+        
+        const netEquity = ownerCapital + partnerCapital + retainedEarnings;
 
         const container = document.getElementById('report-content');
         container.innerHTML = `
@@ -327,6 +343,7 @@ const Reports = {
                     <div class="summary-row"><span class="summary-label" style="padding-left:12px; font-weight:bold;">Current Assets</span><span></span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Accounts Receivable (Buyers)</span><span class="summary-value">PKR ${Utils.formatPKR(accountsReceivable)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Advances to Farmers</span><span class="summary-value">PKR ${Utils.formatPKR(farmerAdvances)}</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Debts & Loans Receivable</span><span class="summary-value">PKR ${Utils.formatPKR(debtsReceivable)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Inventory on Hand</span><span class="summary-value">PKR ${Utils.formatPKR(inventoryValue)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Cash & Equivalent</span><span class="summary-value">PKR ${Utils.formatPKR(totalCashBank)}</span></div>
                     ${bankBalances.map(b => `<div class="summary-row"><span class="summary-label" style="padding-left:36px; font-size:0.85rem; color:var(--text-muted)">- ${Utils.escapeHTML(b.name)}</span><span class="summary-value" style="font-size:0.85rem; color:var(--text-muted)">PKR ${Utils.formatPKR(b.balance)}</span></div>`).join('')}
@@ -346,6 +363,7 @@ const Reports = {
                     
                     <div class="summary-row"><span class="summary-label" style="padding-left:12px; font-weight:bold;">Equity (IAS 1 Presentation)</span><span></span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Owner Capital Contributions</span><span class="summary-value">PKR ${Utils.formatPKR(ownerCapital)}</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Partners Net Capital & Share Equity</span><span class="summary-value">PKR ${Utils.formatPKR(partnerCapital)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Accumulated Retained Earnings / (Loss)</span><span class="summary-value" style="color:${retainedEarnings >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(retainedEarnings)}</span></div>
                     <div class="summary-row" style="border-top: 1px solid var(--border-color); margin-top: 8px;"><span class="summary-label"><strong>Total Equity & Liabilities</strong></span><span class="summary-value" style="color:var(--accent-primary)"><strong>PKR ${Utils.formatPKR(totalLiabilities + netEquity)}</strong></span></div>
                 </div>
@@ -387,11 +405,20 @@ const Reports = {
         
         const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
-        // Financing Activities (from Capital Entries)
+        // Financing Activities (from Capital Entries & Loans)
         const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
         const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
         const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
-        const netFinancingCash = capitalDeposits - capitalWithdrawals;
+        const inRangeDebts = this.inRange(scoped.companyDebts || [], fromDate, toDate);
+        const debtOutflows = inRangeDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+        const debtInflows = inRangeDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+        
+        const partnerTxsRange = this.inRange(scoped.partnerTxs || [], fromDate, toDate);
+        const partnerContributions = partnerTxsRange.filter(e => e.type === 'contribution').reduce((s, e) => s + (e.amount || 0), 0);
+        const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
+        const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
+        
+        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows;
 
         const netCashFlow = netOperatingCash + netFinancingCash;
 
@@ -426,6 +453,10 @@ const Reports = {
                     
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Capital Invested / Deposits</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(capitalDeposits)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Capital Withdrawn</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(capitalWithdrawals)} )</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Partners Capital Contributions</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(partnerContributions)}</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Partners Drawings & Payouts</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(partnerDrawings + partnerPayouts)} )</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Loans Issued (Outflow)</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(debtOutflows)} )</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Loan Repayments Received (Inflow)</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(debtInflows)}</span></div>
                     
                     <div class="summary-row" style="border-top: 1px solid var(--border-color); margin-top: 8px;"><span class="summary-label"><strong>Net Cash from Financing Activities</strong></span><span class="summary-value" style="color:${netFinancingCash >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}"><strong>PKR ${Utils.formatPKR(Math.abs(netFinancingCash))} ${netFinancingCash < 0 ? 'Outflow' : 'Inflow'}</strong></span></div>
                     
@@ -876,10 +907,16 @@ const Reports = {
             const openingReceived = allOpeningPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
             const accountsReceivable = totalSalesAmt - totalSalesReceived + openingReceivable - openingReceived;
 
+            const allPurchasePayments = (scoped.purchasePayments || []).filter(p => p.date <= toDate);
             const openingAdvances = allOpenings.filter(o => o.type === 'farmer_advance').reduce((s, o) => s + (o.amount || 0), 0);
-            const givenAdvances = scoped.advances.filter(a => a.date <= toDate).reduce((s, a) => s + (a.amount || 0), 0);
+            const givenAdvances = scoped.advances.filter(a => a.date <= toDate && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
             const recoveredAdvances = allPurchases.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-            const farmerAdvances = openingAdvances + givenAdvances - recoveredAdvances;
+            const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+            const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances);
+            const allDebts = this.until(scoped.companyDebts || [], toDate);
+            const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+            const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+            const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid);
 
             let totalCashBank = 0;
             allAccs.forEach(acc => {
@@ -891,7 +928,7 @@ const Reports = {
 
             const inventoryMetrics = Utils.calculateInventoryLots(allPurchases, allSales, allExpenses);
             const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
-            const totalAssets = accountsReceivable + farmerAdvances + totalCashBank + inventoryValue;
+            const totalAssets = accountsReceivable + farmerAdvances + debtsReceivable + totalCashBank + inventoryValue;
 
             const totalPurchasesCost = allPurchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
             const totalPurchasesPaid = allPurchases.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments, 'purchaseId', 'amountPaid', toDate), 0);
@@ -914,7 +951,13 @@ const Reports = {
             const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
             const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
             const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo;
-            const netEquity = ownerCapital + retainedEarnings;
+            
+            const partnerTxs = this.until(scoped.partnerTxs || [], toDate);
+            const partnerCapital = partnerTxs.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
+                partnerTxs.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) -
+                partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0);
+                
+            const netEquity = ownerCapital + partnerCapital + retainedEarnings;
 
             const biz = await Settings.getBusiness();
             const { jsPDF } = window.jspdf;
@@ -958,6 +1001,7 @@ const Reports = {
             drawSectionHeader('ASSETS (Current & Liquid Assets)');
             drawRow('Accounts Receivable (Buyers)', accountsReceivable);
             drawRow('Advances to Farmers', farmerAdvances);
+            drawRow('Debts & Loans Receivable', debtsReceivable);
             drawRow('Ending Inventory Valuation (FIFO)', inventoryValue);
             drawRow('Cash & Bank Balances', totalCashBank);
             y += 2;
@@ -975,6 +1019,7 @@ const Reports = {
             doc.text('Equity (IAS 1 Presentation)', 16, y);
             y += 6;
             drawRow('Owner Capital Contributions', ownerCapital);
+            drawRow('Partners Net Capital & Share Equity', partnerCapital);
             drawRow('Accumulated Retained Earnings / (Loss)', retainedEarnings);
             y += 2;
             drawRow('TOTAL LIABILITIES & EQUITY', totalLiabilities + netEquity, true, true);
@@ -1030,7 +1075,16 @@ const Reports = {
             const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
             const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
             const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
-            const netFinancingCash = capitalDeposits - capitalWithdrawals;
+            const inRangeDebts = this.inRange(scoped.companyDebts || [], fromDate, toDate);
+            const debtOutflows = inRangeDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+            const debtInflows = inRangeDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+            
+            const partnerTxsRange = this.inRange(scoped.partnerTxs || [], fromDate, toDate);
+            const partnerContributions = partnerTxsRange.filter(e => e.type === 'contribution').reduce((s, e) => s + (e.amount || 0), 0);
+            const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
+            const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
+
+            const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows;
             const netCashFlow = netOperatingCash + netFinancingCash;
 
             const biz = await Settings.getBusiness();
@@ -1087,6 +1141,10 @@ const Reports = {
             drawSectionHeader('FINANCING ACTIVITIES');
             drawRow('Owner Capital Injections', capitalDeposits);
             drawRow('Owner Capital Withdrawals', capitalWithdrawals, true);
+            drawRow('Partners Capital Contributions', partnerContributions);
+            drawRow('Partners Drawings & Payouts', partnerDrawings + partnerPayouts, true);
+            drawRow('Loans Issued (Outflow)', debtOutflows, true);
+            drawRow('Loan Repayments Received (Inflow)', debtInflows);
             y += 2;
             drawRow('Net Cash from Financing Activities', netFinancingCash, netFinancingCash < 0, true);
 
@@ -1136,10 +1194,16 @@ const Reports = {
         const openingReceived = allOpeningPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
         const accountsReceivable = totalSalesAmt - totalSalesReceived + openingReceivable - openingReceived;
 
+        const allPurchasePayments = (scoped.purchasePayments || []).filter(p => p.date <= toDate);
         const openingAdvances = allOpenings.filter(o => o.type === 'farmer_advance').reduce((s, o) => s + (o.amount || 0), 0);
-        const givenAdvances = scoped.advances.filter(a => a.date <= toDate).reduce((s, a) => s + (a.amount || 0), 0);
+        const givenAdvances = scoped.advances.filter(a => a.date <= toDate && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
         const recoveredAdvances = allPurchases.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-        const farmerAdvances = openingAdvances + givenAdvances - recoveredAdvances;
+        const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+        const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances);
+        const allDebts = this.until(scoped.companyDebts || [], toDate);
+        const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+        const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid);
 
         let totalCashBank = 0;
         allAccs.forEach(acc => {
@@ -1151,7 +1215,7 @@ const Reports = {
 
         const inventoryMetrics = Utils.calculateInventoryLots(allPurchases, allSales, allExpenses);
         const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
-        const totalAssets = accountsReceivable + farmerAdvances + totalCashBank + inventoryValue;
+        const totalAssets = accountsReceivable + farmerAdvances + debtsReceivable + totalCashBank + inventoryValue;
 
         const totalPurchasesCost = allPurchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
         const totalPurchasesPaid = allPurchases.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments, 'purchaseId', 'amountPaid', toDate), 0);
@@ -1174,11 +1238,18 @@ const Reports = {
         const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
         const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
         const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo;
-        const netEquity = ownerCapital + retainedEarnings;
+        
+        const partnerTxs = this.until(scoped.partnerTxs || [], toDate);
+        const partnerCapital = partnerTxs.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
+            partnerTxs.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) -
+            partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0);
+
+        const netEquity = ownerCapital + partnerCapital + retainedEarnings;
 
         const rows = [
             { Category: 'ASSETS', Item: 'Accounts Receivable (Buyers)', Amount: accountsReceivable },
             { Category: 'ASSETS', Item: 'Advances to Farmers', Amount: farmerAdvances },
+            { Category: 'ASSETS', Item: 'Debts & Loans Receivable', Amount: debtsReceivable },
             { Category: 'ASSETS', Item: 'Inventory on Hand (FIFO)', Amount: inventoryValue },
             { Category: 'ASSETS', Item: 'Cash & Bank Balances', Amount: totalCashBank },
             { Category: 'ASSETS', Item: 'TOTAL ASSETS', Amount: totalAssets },
@@ -1186,6 +1257,7 @@ const Reports = {
             { Category: 'LIABILITIES', Item: 'Advances from Buyers', Amount: buyerAdvances },
             { Category: 'LIABILITIES', Item: 'TOTAL LIABILITIES', Amount: totalLiabilities },
             { Category: 'EQUITY', Item: 'Owner Capital Contributions', Amount: ownerCapital },
+            { Category: 'EQUITY', Item: 'Partners Net Capital & Share Equity', Amount: partnerCapital },
             { Category: 'EQUITY', Item: 'Accumulated Retained Earnings / (Loss)', Amount: retainedEarnings },
             { Category: 'EQUITY', Item: 'TOTAL LIABILITIES & EQUITY', Amount: totalLiabilities + netEquity },
         ];
@@ -1232,7 +1304,16 @@ const Reports = {
         const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
         const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
         const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
-        const netFinancingCash = capitalDeposits - capitalWithdrawals;
+        const inRangeDebts = this.inRange(scoped.companyDebts || [], fromDate, toDate);
+        const debtOutflows = inRangeDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+        const debtInflows = inRangeDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+        
+        const partnerTxsRange = this.inRange(scoped.partnerTxs || [], fromDate, toDate);
+        const partnerContributions = partnerTxsRange.filter(e => e.type === 'contribution').reduce((s, e) => s + (e.amount || 0), 0);
+        const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
+        const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
+
+        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows;
         const netCashFlow = netOperatingCash + netFinancingCash;
 
         const rows = [
@@ -1245,6 +1326,10 @@ const Reports = {
             { Category: 'OPERATING', Item: 'NET OPERATING CASH FLOW', Amount: netOperatingCash },
             { Category: 'FINANCING', Item: 'Owner Capital Injections', Amount: capitalDeposits },
             { Category: 'FINANCING', Item: 'Owner Capital Withdrawals', Amount: -capitalWithdrawals },
+            { Category: 'FINANCING', Item: 'Partners Capital Contributions', Amount: partnerContributions },
+            { Category: 'FINANCING', Item: 'Partners Drawings & Payouts', Amount: -(partnerDrawings + partnerPayouts) },
+            { Category: 'FINANCING', Item: 'Loans Issued (Outflow)', Amount: -debtOutflows },
+            { Category: 'FINANCING', Item: 'Loan Repayments Received (Inflow)', Amount: debtInflows },
             { Category: 'FINANCING', Item: 'NET FINANCING CASH FLOW', Amount: netFinancingCash },
             { Category: 'SUMMARY', Item: 'NET CASH FLOW FOR PERIOD', Amount: netCashFlow }
         ];

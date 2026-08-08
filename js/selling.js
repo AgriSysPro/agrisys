@@ -133,7 +133,7 @@ const Selling = {
     async syncInitialReceiptTx(data) {
         await Utils.deleteLinkedCapitalTx('sales', data.id);
         const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', data.id);
-        const laterReceipts = linkedReceipts.reduce((s, p) => s + (p.amount || 0), 0);
+        const laterReceipts = Utils.sumBy(linkedReceipts, 'amount');
         const initialReceived = Math.max(0, (data.amountReceived || 0) - laterReceipts);
         data.initialReceiptAmount = initialReceived;
         data.initialCapitalTxId = null;
@@ -161,18 +161,17 @@ const Selling = {
         sales = Utils.filterBySeason(sales, activeSeason);
         adjustments = Utils.filterBySeason(adjustments, activeSeason);
         const adjusted = Utils.applyStockAdjustments(purchases, sales, adjustments);
-        purchases = adjusted.purchases;
-        sales = adjusted.sales;
-        sales = sales.filter(s => s.id !== excludeSaleId);
-
+        
         const cropLower = (crop || '').trim().toLowerCase();
-        const purchased = purchases
-            .filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower)
-            .reduce((sum, p) => sum + (p.netWeight || 0), 0);
-        const sold = sales
-            .filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower)
-            .reduce((sum, s) => sum + (s.netWeight || 0), 0);
-        return purchased - sold;
+        const totalBought = Utils.sumBy(
+            adjusted.purchases.filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower),
+            'netWeight'
+        );
+        const totalSold = Utils.sumBy(
+            adjusted.sales.filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower && s.id !== excludeSaleId),
+            'netWeight'
+        );
+        return totalBought - totalSold;
     },
 
     async buildUnitOfWorkOperations(d, existing) {
@@ -184,7 +183,7 @@ const Selling = {
         linkedCap.forEach(t => ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id }));
 
         const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', d.id);
-        const laterReceived = linkedReceipts.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const laterReceived = Utils.sumBy(linkedReceipts, 'amount');
         const initialReceived = Math.max(0, (d.amountReceived || 0) - laterReceived);
         d.initialReceiptAmount = initialReceived;
         d.initialCapitalTxId = null;
@@ -241,6 +240,41 @@ const Selling = {
             }
         });
 
+        // 5. Materialized Views (Stock & Buyer Balance)
+        if (typeof CoreServices !== 'undefined') {
+            const stockDeltas = {};
+            const buyerDeltas = {};
+            
+            if (existing && existing.crop) {
+                const c = existing.crop.trim().toLowerCase();
+                stockDeltas[c] = (stockDeltas[c] || 0) + (existing.netWeight || 0); // Revert sale adds to stock
+            }
+            if (d.crop) {
+                const c = d.crop.trim().toLowerCase();
+                stockDeltas[c] = (stockDeltas[c] || 0) - (d.netWeight || 0); // New sale subtracts from stock
+            }
+            
+            if (existing && existing.buyerName) {
+                const b = existing.buyerName.trim().toLowerCase();
+                buyerDeltas[b] = (buyerDeltas[b] || 0) - ((existing.amount || 0) - (existing.amountReceived || 0));
+            }
+            if (d.buyerName) {
+                const b = d.buyerName.trim().toLowerCase();
+                buyerDeltas[b] = (buyerDeltas[b] || 0) + ((d.amount || 0) - (d.amountReceived || 0));
+            }
+            
+            for (const [crop, delta] of Object.entries(stockDeltas)) {
+                if (Math.abs(delta) < 0.001) continue;
+                const op = await CoreServices.getStockOp(crop, delta);
+                if (op) ops.push(op);
+            }
+            for (const [buyer, delta] of Object.entries(buyerDeltas)) {
+                if (Math.abs(delta) < 0.001) continue;
+                const op = await CoreServices.getPartyBalanceOp('buyer', buyer, delta);
+                if (op) ops.push(op);
+            }
+        }
+
         return ops;
     },
 
@@ -253,7 +287,7 @@ const Selling = {
         if (d.amountReceived < 0) { Utils.showToast('Received amount cannot be negative', 'error'); return; }
         if (d.amountReceived > d.amount) { Utils.showToast('Received amount cannot exceed sale amount', 'error'); return; }
         const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', d.id);
-        const laterReceived = linkedReceipts.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const laterReceived = Utils.sumBy(linkedReceipts, 'amount');
         const initialReceived = Math.max(0, (d.amountReceived || 0) - laterReceived);
         if (initialReceived > 0 && !d.initialReceiptAccountId) { Utils.showToast('Select cash/bank account for initial receipt', 'error'); return; }
         const available = await this.getAvailableStock(d.crop, this.editingId || d.id);
@@ -388,20 +422,40 @@ const SaleList = {
         const sale = await DB.get('sales', id);
         if (!sale) return;
         const payments = await DB.getByIndex('sale_payments', 'saleId', id);
-        const paymentTotal = payments.reduce((s, p) => s + (p.amount || 0), 0);
+        const paymentTotal = Utils.sumBy(payments, 'amount');
         const msg = `Delete sale ${id}?\n\nLinked buyer receipts: ${payments.length} (PKR ${Utils.formatPKR(paymentTotal)})\nLinked capital transactions for those receipts will also be removed.`;
         if (!await Utils.confirm(msg)) return;
+        const ops = [];
+        const allCapTxs = await DB.getAll('capital_transactions');
         for (const p of payments) {
-            await Utils.deleteLinkedCapitalTx('sale_payments', p.id);
-            await DB.delete('sale_payments', p.id);
+            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'sale_payments' && t.sourceId === p.id);
+            for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+            ops.push({ storeName: 'sale_payments', action: 'delete', key: p.id, softDelete: true, data: p });
         }
-        await Utils.deleteLinkedCapitalTx('sales', id);
-        await DB.delete('sales', id);
-        await Utils.audit('delete', 'sale', id, {
-            oldAmount: sale.amount || 0,
-            oldRecord: sale,
-            linkedPayments: payments
-        });
+        
+        const linkedCap = allCapTxs.filter(t => t.sourceStore === 'sales' && t.sourceId === id);
+        for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+        
+        ops.push({ storeName: 'audit_logs', action: 'put', data: {
+            id: Utils.generateId(), date: Utils.todayISO(), action: 'delete',
+            entityType: 'sale', entityId: id, details: { amount: sale.amount || 0 },
+            createdAt: new Date().toISOString()
+        }});
+
+        if (typeof CoreServices !== 'undefined') {
+            if (sale.crop) {
+                const op = await CoreServices.getStockOp(sale.crop, sale.netWeight || 0); // Reverse sale => add to stock
+                if (op) ops.push(op);
+            }
+            if (sale.buyerName) {
+                const op = await CoreServices.getPartyBalanceOp('buyer', sale.buyerName, -((sale.amount || 0) - (sale.amountReceived || 0)));
+                if (op) ops.push(op);
+            }
+        }
+
+        ops.push({ storeName: 'sales', action: 'delete', key: id, softDelete: true, data: sale });
+
+        await DB.commitUnitOfWork(ops);
         Utils.showToast('Deleted!');
         this.render();
         if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();

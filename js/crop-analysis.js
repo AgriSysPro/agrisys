@@ -73,21 +73,21 @@ const CropAnalysis = {
 
         // Purchase metrics
         const purchaseCount = actualPurchases.length;
-        const purchaseWeight = fp.reduce((s, p) => s + (p.netWeight || 0), 0);
+        const purchaseWeight = Utils.sumBy(fp, 'netWeight');
         const purchaseMaund = purchaseWeight / 40;
-        const purchaseAmount = actualPurchases.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
+        const purchaseAmount = Utils.sumBy(actualPurchases, p => Utils.purchaseCostAmount(p));
         const purchaseAvgRate = purchaseMaund > 0 ? purchaseAmount / purchaseMaund : 0;
-        const purchasePayable = actualPurchases.reduce((s, p) => s + Utils.purchasePayableAmount(p), 0);
-        const purchasePaid = actualPurchases.reduce((s, p) => s + (p.amountPaid || 0), 0);
+        const purchasePayable = Utils.sumBy(actualPurchases, p => Utils.purchasePayableAmount(p));
+        const purchasePaid = Utils.sumBy(actualPurchases, 'amountPaid');
         const purchaseBalance = purchasePayable - purchasePaid;
 
         // Sale metrics
         const saleCount = actualSales.length;
-        const saleWeight = fs.reduce((s, p) => s + (p.netWeight || 0), 0);
+        const saleWeight = Utils.sumBy(fs, 'netWeight');
         const saleMaund = saleWeight / 40;
-        const saleAmount = actualSales.reduce((s, p) => s + (p.amount || 0), 0);
+        const saleAmount = Utils.sumBy(actualSales, 'amount');
         const saleAvgRate = saleMaund > 0 ? saleAmount / saleMaund : 0;
-        const saleReceived = actualSales.reduce((s, p) => s + (p.amountReceived || 0), 0);
+        const saleReceived = Utils.sumBy(actualSales, 'amountReceived');
         const saleBalance = saleAmount - saleReceived;
 
         // Net inventory
@@ -95,7 +95,7 @@ const CropAnalysis = {
         const netMaund = netWeight / 40;
 
         // Expenses
-        const totalExpenses = fe.reduce((s, e) => s + (e.amount || 0), 0);
+        const totalExpenses = Utils.sumBy(fe, 'amount');
 
         // Group expenses by type
         const expensesByType = {};
@@ -119,10 +119,10 @@ const CropAnalysis = {
         });
 
         // Commission Revenue earned on purchases
-        const totalCommission = fp.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+        const totalCommission = Utils.sumBy(fp, 'commissionTotal');
 
         // Expenses linked to purchases are already in COGS. We only subtract unlinked expenses.
-        const unlinkedExpenses = fe.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
+        const unlinkedExpenses = Utils.sumBy(fe.filter(e => !e.purchaseId), 'amount');
 
         // Net P&L (Sale Revenue + Commission Revenue - COGS - Unlinked Expenses)
         const netPL = saleAmount + totalCommission - totalCogs - unlinkedExpenses;
@@ -337,13 +337,13 @@ const CropAnalysis = {
             const mp = purchases.filter(p => p.date && p.date.startsWith(m.key));
             const ms = sales.filter(s => s.date && s.date.startsWith(m.key));
 
-            const pWeight = mp.reduce((s, p) => s + (p.netWeight || 0), 0);
-            const pAmount = mp.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
+            const pWeight = Utils.sumBy(mp, 'netWeight');
+            const pAmount = Utils.sumBy(mp, p => Utils.purchaseCostAmount(p));
             const pMaund = pWeight / 40;
             const pRate = pMaund > 0 ? pAmount / pMaund : 0;
 
-            const sWeight = ms.reduce((s, p) => s + (p.netWeight || 0), 0);
-            const sAmount = ms.reduce((s, p) => s + (p.amount || 0), 0);
+            const sWeight = Utils.sumBy(ms, 'netWeight');
+            const sAmount = Utils.sumBy(ms, 'amount');
             const sMaund = sWeight / 40;
             const sRate = sMaund > 0 ? sAmount / sMaund : 0;
 

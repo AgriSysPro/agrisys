@@ -282,12 +282,7 @@ const Purchasing = {
     },
 
     async getAvailableAdvance(farmerName, purchaseId = null) {
-        const activeSeason = await Utils.getActiveSeason();
-        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason)
-            .filter(a => (a.farmerName || '').toLowerCase() === (farmerName || '').toLowerCase() && a.purchaseId !== purchaseId);
-        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason)
-            .filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === (farmerName || '').toLowerCase());
-        return advances.reduce((s, a) => s + (a.amount || 0), 0) + openings.reduce((s, o) => s + (o.amount || 0), 0);
+        return await Utils.getFarmerAvailableAdvance(farmerName, { excludePurchaseId: purchaseId });
     },
 
     async validate(data) {
@@ -298,7 +293,7 @@ const Purchasing = {
         if (data.amountPaid < 0) { Utils.showToast('Paid amount cannot be negative', 'error'); return false; }
         if (data.amountPaid > data.netPayableAmount) { Utils.showToast('Paid amount cannot exceed net payable amount', 'error'); return false; }
         const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
-        const laterPaid = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const laterPaid = Utils.sumBy(linkedPayments, 'amount');
         const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPaid);
         if (initialPaid > 0 && !data.initialPaymentAccountId) { Utils.showToast('Select cash/bank account for initial payment', 'error'); return false; }
         const availableAdvance = await this.getAvailableAdvance(data.farmerName, data.id);
@@ -311,21 +306,14 @@ const Purchasing = {
 
     async processAdvanceDeduction(data) {
         const all = await DB.getAll('farmer_advances');
-        const existing = all.filter(a => a.purchaseId === data.id);
+        const existing = all.filter(a => a.purchaseId === data.id && (a.amount || 0) <= 0);
         for (const e of existing) await DB.delete('farmer_advances', e.id);
-        if ((data.advanceDeducted || 0) > 0) {
-            await DB.put('farmer_advances', {
-                id: Utils.generateId(), farmerName: data.farmerName, amount: -data.advanceDeducted,
-                date: data.date, notes: `Deducted in Purchase #${data.id}`, purchaseId: data.id, 
-                createdAt: new Date().toISOString()
-            });
-        }
     },
 
     async syncInitialPaymentTx(data) {
         await Utils.deleteLinkedCapitalTx('purchases', data.id);
         const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
-        const laterPayments = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const laterPayments = Utils.sumBy(linkedPayments, 'amount');
         const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPayments);
         data.initialPaymentAmount = initialPaid;
         data.initialCapitalTxId = null;
@@ -360,21 +348,10 @@ const Purchasing = {
             }
         }
 
-        // 3. Farmer advances
+        // 3. Farmer advances cleanup of any legacy negative deduction records
         const allAdv = await DB.getAll('farmer_advances');
-        const existingAdv = allAdv.filter(a => a.purchaseId === data.id);
+        const existingAdv = allAdv.filter(a => a.purchaseId === data.id && (a.amount || 0) <= 0);
         existingAdv.forEach(e => ops.push({ storeName: 'farmer_advances', action: 'delete', key: e.id }));
-        if ((data.advanceDeducted || 0) > 0) {
-            ops.push({
-                storeName: 'farmer_advances',
-                action: 'put',
-                data: {
-                    id: Utils.generateId(), farmerName: data.farmerName, amount: -data.advanceDeducted,
-                    date: data.date, notes: `Deducted in Purchase #${data.id}`, purchaseId: data.id, 
-                    createdAt: new Date().toISOString()
-                }
-            });
-        }
 
         // 4. Linked capital transactions
         const capTxs = await DB.getAll('capital_transactions');
@@ -382,7 +359,7 @@ const Purchasing = {
         linkedCap.forEach(t => ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id }));
         
         const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
-        const laterPayments = linkedPayments.reduce((s, p) => s + (p.amount || 0), 0);
+        const laterPayments = Utils.sumBy(linkedPayments, 'amount');
         const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPayments);
         data.initialPaymentAmount = initialPaid;
         data.initialCapitalTxId = null;
@@ -424,6 +401,41 @@ const Purchasing = {
                 createdAt: new Date().toISOString()
             }
         });
+
+        // 6. Materialized Views (Stock & Farmer Balance)
+        if (typeof CoreServices !== 'undefined') {
+            const stockDeltas = {};
+            const farmerDeltas = {};
+            
+            if (existing && existing.crop) {
+                const c = existing.crop.trim().toLowerCase();
+                stockDeltas[c] = (stockDeltas[c] || 0) - (existing.netWeight || 0);
+            }
+            if (data.crop) {
+                const c = data.crop.trim().toLowerCase();
+                stockDeltas[c] = (stockDeltas[c] || 0) + (data.netWeight || 0);
+            }
+            
+            if (existing && existing.farmerName) {
+                const f = existing.farmerName.trim().toLowerCase();
+                farmerDeltas[f] = (farmerDeltas[f] || 0) - ((existing.netPayableAmount || existing.amount || 0) - (existing.amountPaid || 0));
+            }
+            if (data.farmerName) {
+                const f = data.farmerName.trim().toLowerCase();
+                farmerDeltas[f] = (farmerDeltas[f] || 0) + ((data.netPayableAmount || data.amount || 0) - (data.amountPaid || 0));
+            }
+            
+            for (const [crop, delta] of Object.entries(stockDeltas)) {
+                if (Math.abs(delta) < 0.001) continue;
+                const op = await CoreServices.getStockOp(crop, delta);
+                if (op) ops.push(op);
+            }
+            for (const [farmer, delta] of Object.entries(farmerDeltas)) {
+                if (Math.abs(delta) < 0.001) continue;
+                const op = await CoreServices.getPartyBalanceOp('farmer', farmer, delta);
+                if (op) ops.push(op);
+            }
+        }
 
         return ops;
     },
@@ -600,20 +612,46 @@ const PurchaseList = {
         if (!purchase) return;
         const payments = await DB.getByIndex('purchase_payments', 'purchaseId', id);
         const expenses = await DB.getByIndex('expenses', 'purchaseId', id);
-        const paymentTotal = payments.reduce((s, p) => s + (p.amount || 0), 0);
-        const expenseTotal = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+        const paymentTotal = Utils.sumBy(payments, 'amount');
+        const expenseTotal = Utils.sumBy(expenses, 'amount');
         const msg = `Delete purchase ${id}?\n\nLinked farmer payments: ${payments.length} (PKR ${Utils.formatPKR(paymentTotal)})\nLinked expenses that will be removed: ${expenses.length} (PKR ${Utils.formatPKR(expenseTotal)})\nLinked capital transactions for those payments/expenses will also be removed.`;
         if (!await Utils.confirm(msg)) return;
+        const ops = [];
+        const allCapTxs = await DB.getAll('capital_transactions') || [];
+
         for (const e of expenses) {
-            await Utils.deleteLinkedCapitalTx('expenses', e.id);
-            await DB.delete('expenses', e.id);
+            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'expenses' && t.sourceId === e.id);
+            for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+            ops.push({ storeName: 'expenses', action: 'delete', key: e.id, softDelete: true, data: e });
         }
         for (const p of payments) {
-            await Utils.deleteLinkedCapitalTx('purchase_payments', p.id);
-            await DB.delete('purchase_payments', p.id);
+            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'purchase_payments' && t.sourceId === p.id);
+            for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+            ops.push({ storeName: 'purchase_payments', action: 'delete', key: p.id, softDelete: true, data: p });
         }
-        await Utils.deleteLinkedCapitalTx('purchases', id);
-        await DB.delete('purchases', id);
+        const linkedCap = allCapTxs.filter(t => t.sourceStore === 'purchases' && t.sourceId === id);
+        for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+
+        ops.push({ storeName: 'audit_logs', action: 'put', data: {
+            id: Utils.generateId(), date: Utils.todayISO(), action: 'delete',
+            entityType: 'purchase', entityId: id, details: { amount: purchase.netPayableAmount || purchase.amount || 0 },
+            createdAt: new Date().toISOString()
+        }});
+
+        if (typeof CoreServices !== 'undefined') {
+            if (purchase.crop) {
+                const op = await CoreServices.getStockOp(purchase.crop, -(purchase.netWeight || 0));
+                if (op) ops.push(op);
+            }
+            if (purchase.farmerName) {
+                const op = await CoreServices.getPartyBalanceOp('farmer', purchase.farmerName, -((purchase.netPayableAmount || purchase.amount || 0) - (purchase.amountPaid || 0)));
+                if (op) ops.push(op);
+            }
+        }
+
+        ops.push({ storeName: 'purchases', action: 'delete', key: id, softDelete: true, data: purchase });
+
+        await DB.commitUnitOfWork(ops);
         await Utils.audit('delete', 'purchase', id, {
             oldAmount: purchase.netPayableAmount || purchase.amount || 0,
             oldRecord: purchase,

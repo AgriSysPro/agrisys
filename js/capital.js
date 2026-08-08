@@ -399,29 +399,40 @@ const BankAccounts = {
         const toAcc = accounts.find(a => a.id === toId);
         const transferId = Utils.generateId();
 
-        // Withdrawal from source
-        await DB.put('capital_transactions', {
-            id: Utils.generateId(),
-            accountId: fromId,
-            type: 'withdrawal',
-            amount, date,
-            description: desc || `Transfer to ${toAcc ? toAcc.name : 'Unknown'}`,
-            transferId,
-            isReconciled: false,
-            createdAt: new Date().toISOString()
+        // Transfer Atomicity Fix (ISS-001)
+        const ops = [];
+        
+        ops.push({
+            storeName: 'capital_transactions',
+            action: 'put',
+            data: {
+                id: Utils.generateId(),
+                accountId: fromId,
+                type: 'withdrawal',
+                amount, date,
+                description: desc || `Transfer to ${toAcc ? toAcc.name : 'Unknown'}`,
+                transferId,
+                isReconciled: false,
+                createdAt: new Date().toISOString()
+            }
         });
 
-        // Deposit to destination
-        await DB.put('capital_transactions', {
-            id: Utils.generateId(),
-            accountId: toId,
-            type: 'deposit',
-            amount, date,
-            description: desc || `Transfer from ${fromAcc ? fromAcc.name : 'Unknown'}`,
-            transferId,
-            isReconciled: false,
-            createdAt: new Date().toISOString()
+        ops.push({
+            storeName: 'capital_transactions',
+            action: 'put',
+            data: {
+                id: Utils.generateId(),
+                accountId: toId,
+                type: 'deposit',
+                amount, date,
+                description: desc || `Transfer from ${fromAcc ? fromAcc.name : 'Unknown'}`,
+                transferId,
+                isReconciled: false,
+                createdAt: new Date().toISOString()
+            }
         });
+
+        await DB.commitUnitOfWork(ops);
 
         Utils.hideModal('transfer-modal');
         Utils.showToast(`PKR ${Utils.formatPKR(amount)} transferred!`);
@@ -431,16 +442,21 @@ const BankAccounts = {
     // ── Delete Account ──
     async deleteAccount(id) {
         if (!await Utils.confirm('Delete this account and all its transactions?')) return;
-        await DB.delete('capital_accounts', id);
+        const ops = [];
+        const acc = await DB.get('capital_accounts', id);
+        if (acc) ops.push({ storeName: 'capital_accounts', action: 'delete', key: id, softDelete: true, data: acc });
+
         const txs = await DB.getByIndex('capital_transactions', 'accountId', id);
-        for (const t of txs) await DB.delete('capital_transactions', t.id);
-        // Unlink any capital entries referencing this account
+        for (const t of txs) ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id, softDelete: true, data: t });
+
         const capEntries = (await DB.getAll('capital_entries')).filter(e => e.accountId === id);
         for (const ce of capEntries) {
             ce.accountId = null;
             ce.linkedTxId = null;
-            await DB.put('capital_entries', ce);
+            ops.push({ storeName: 'capital_entries', action: 'put', data: ce });
         }
+
+        await DB.commitUnitOfWork(ops);
         Utils.showToast('Account deleted!');
         this.render();
     },
@@ -448,19 +464,39 @@ const BankAccounts = {
     // ── Delete Transaction ──
     async deleteTx(id) {
         if (!await Utils.confirm('Delete this transaction?')) return;
-        // If it's a transfer, also delete the linked transaction
+        const ops = [];
         const tx = await DB.get('capital_transactions', id);
+        if (tx) ops.push({ storeName: 'capital_transactions', action: 'delete', key: id, softDelete: true, data: tx });
+
         if (tx && tx.transferId) {
             const allTx = await DB.getAll('capital_transactions');
             const linked = allTx.filter(t => t.transferId === tx.transferId && t.id !== id);
-            for (const lt of linked) await DB.delete('capital_transactions', lt.id);
+            for (const lt of linked) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lt.id, softDelete: true, data: lt });
         }
-        if (tx && tx.sourceStore === 'capital_entries' && tx.sourceId) {
-            try { await DB.delete('capital_entries', tx.sourceId); } catch (e) {}
+        if (tx && tx.sourceStore && tx.sourceId) {
+            const src = await DB.get(tx.sourceStore, tx.sourceId);
+            if (src) ops.push({ storeName: tx.sourceStore, action: 'delete', key: tx.sourceId, softDelete: true, data: src });
         }
-        await DB.delete('capital_transactions', id);
+
+        await DB.commitUnitOfWork(ops);
         Utils.showToast('Deleted!');
         this.render();
+    },
+
+    async deleteLinkedTx(sourceStore, sourceId) {
+        const allTx = await DB.getAll('capital_transactions') || [];
+        const linked = allTx.filter(t => t.sourceStore === sourceStore && t.sourceId === sourceId);
+        for (const lt of linked) {
+            if (lt.accountId) {
+                const acc = await DB.get('capital_accounts', lt.accountId);
+                if (acc) {
+                    if (lt.type === 'deposit') acc.balance = Math.max(0, (acc.balance || 0) - (lt.amount || 0));
+                    else acc.balance = (acc.balance || 0) + (lt.amount || 0);
+                    await DB.put('capital_accounts', acc);
+                }
+            }
+            await DB.delete('capital_transactions', lt.id);
+        }
     },
 
     // ── Account Statement PDF ──
@@ -520,30 +556,7 @@ const BankAccounts = {
         const cw = pw - mx * 2; // content width
 
         // ── Header ──
-        let y = 15;
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(16);
-        doc.text((biz.bizName).toUpperCase(), pw / 2, y, { align: 'center' });
-        y += 5;
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        if (biz.address) { doc.text(biz.address, pw / 2, y, { align: 'center' }); y += 4; }
-        if (biz.phone) { doc.text('Phone: ' + biz.phone, pw / 2, y, { align: 'center' }); y += 4; }
-        if (biz.ownerName) { doc.text('Proprietor: ' + biz.ownerName, pw / 2, y, { align: 'center' }); y += 4; }
-
-        // Double rule
-        doc.setLineWidth(0.8);
-        doc.line(mx, y, pw - mx, y);
-        y += 1;
-        doc.setLineWidth(0.3);
-        doc.line(mx, y, pw - mx, y);
-        y += 6;
-
-        // ── Title ──
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(13);
-        doc.text('ACCOUNT STATEMENT', pw / 2, y, { align: 'center' });
-        y += 7;
+        let y = ReceiptPDF.drawReportHeader(doc, biz, 'ACCOUNT STATEMENT');
 
         // ── Account Info Block ──
         doc.setFontSize(9);
@@ -676,9 +689,7 @@ const BankAccounts = {
         y += 8;
 
         // Footer
-        doc.setFontSize(7);
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Generated: ${new Date().toLocaleString()}`, pw / 2, y, { align: 'center' });
+        ReceiptPDF.drawReportFooter(doc);
 
         const fileName = `Statement_${account.name.replace(/[^a-zA-Z0-9]/g, '_')}_${Utils.todayISO()}.pdf`;
         doc.save(fileName);

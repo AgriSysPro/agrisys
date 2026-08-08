@@ -113,6 +113,7 @@ const Buyers = {
         const activeSeason = await Utils.getActiveSeason();
         const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
         const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        const debts = Utils.filterBySeason(await DB.getAll('company_debts'), activeSeason);
         if (!buyers.length) { Utils.showToast('No data to export', 'warning'); return; }
 
         const rows = buyers.sort((a, b) => a.name.localeCompare(b.name)).map(b => {
@@ -122,6 +123,8 @@ const Buyers = {
             const openingAdvance = openings.filter(o => o.type === 'buyer_advance' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
             const totalRcvd = openingReceived + bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
+            const bDebts = debts.filter(d => (d.personName || '').trim().toLowerCase() === b.name.toLowerCase());
+            const netDebt = Math.max(0, bDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0) - bDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0));
             return {
                 'Name': b.name,
                 'Phone': b.phone || '',
@@ -129,6 +132,7 @@ const Buyers = {
                 'Total Amount': totalAmt,
                 'Total Received': totalRcvd,
                 'Opening Advance': openingAdvance,
+                'Debts / Loans Receivable': netDebt,
                 'Balance': totalAmt - totalRcvd - openingAdvance
             };
         });
@@ -227,56 +231,44 @@ const Buyers = {
             const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
             // Professional Header
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(18);
-            doc.text((biz.bizName || 'AgriSys').toUpperCase(), 105, 15, { align: 'center' });
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'normal');
-            doc.text(biz.address || 'Agricultural Business Management', 105, 21, { align: 'center' });
-            doc.text('Phone: ' + (biz.phone || '-'), 105, 26, { align: 'center' });
-
-            doc.setLineWidth(0.8); doc.line(15, 29, 195, 29);
-            doc.setLineWidth(0.3); doc.line(15, 30, 195, 30);
-
-            doc.setFontSize(12);
-            doc.setFont('helvetica', 'bold');
-            doc.text('BUYER STATEMENT OF ACCOUNT', 105, 37, { align: 'center' });
-            doc.setLineWidth(0.15); doc.line(15, 40, 195, 40);
+            let y = ReceiptPDF.drawReportHeader(doc, biz, 'BUYER STATEMENT OF ACCOUNT');
 
             // Buyer Info Box
             doc.setFillColor(245, 245, 245);
-            doc.rect(15, 43, 180, 18, 'F');
+            doc.rect(15, y + 3, 180, 18, 'F');
             doc.setLineWidth(0.15);
-            doc.rect(15, 43, 180, 18, 'S');
+            doc.rect(15, y + 3, 180, 18, 'S');
 
             doc.setFontSize(9);
             doc.setFont('helvetica', 'bold');
-            doc.text('Account:', 18, 50);
+            doc.text('Account:', 18, y + 10);
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(11);
-            doc.text(buyer.name.toUpperCase(), 36, 50);
+            doc.text(buyer.name.toUpperCase(), 36, y + 10);
 
             doc.setFontSize(9);
             doc.setFont('helvetica', 'bold');
-            doc.text('Phone:', 18, 56);
+            doc.text('Phone:', 18, y + 16);
             doc.setFont('helvetica', 'normal');
-            doc.text(buyer.phone || 'N/A', 32, 56);
+            doc.text(buyer.phone || 'N/A', 32, y + 16);
 
             doc.setFont('helvetica', 'bold');
-            doc.text('Statement Date:', 130, 50);
+            doc.text('Statement Date:', 130, y + 10);
             doc.setFont('helvetica', 'normal');
-            doc.text(Utils.formatDate(new Date().toISOString()), 163, 50);
+            doc.text(Utils.formatDate(new Date().toISOString()), 163, y + 10);
 
             doc.setFont('helvetica', 'bold');
-            doc.text('Sales / Receipts:', 130, 56);
+            doc.text('Sales / Receipts:', 130, y + 16);
             doc.setFont('helvetica', 'normal');
-            doc.text(`${ledger.counts.sales} / ${ledger.counts.payments}`, 166, 56);
+            doc.text(`${ledger.counts.sales} / ${ledger.counts.payments}`, 166, y + 16);
             doc.setFontSize(7);
-            doc.text(`Period: ${options.from ? Utils.formatDate(options.from) : 'Start'} to ${options.to ? Utils.formatDate(options.to) : 'Today'}`, 105, 64, { align: 'center' });
+            doc.text(`Period: ${options.from ? Utils.formatDate(options.from) : 'Start'} to ${options.to ? Utils.formatDate(options.to) : 'Today'}`, 105, y + 24, { align: 'center' });
+
+            y += 30;
 
             // Ledger Table
             doc.autoTable({
-                startY: 70,
+                startY: y,
                 margin: { top: 18, left: 15, right: 15 },
                 head: [['Date', 'Ref', 'Type', 'Description', 'Receivable (+)', 'Received (-)', 'Balance']],
                 body: tableBody,
@@ -300,13 +292,7 @@ const Buyers = {
                     5: { halign: 'right', cellWidth: 26 },
                     6: { halign: 'right', cellWidth: 28, fontStyle: 'bold' }
                 },
-                didDrawPage: (data) => {
-                    doc.setFontSize(6.5);
-                    doc.setTextColor(120);
-                    doc.text(`Buyer Ledger - ${buyer.name}`, 15, 290);
-                    doc.text(`Page ${data.pageNumber}`, 195, 290, { align: 'right' });
-                    doc.setTextColor(0);
-                }
+                didDrawPage: (data) => {}
             });
 
             // Final Balance Box
@@ -335,10 +321,7 @@ const Buyers = {
             doc.text('Authorized Signature / Stamp', 165, sy + 5, { align: 'center' });
 
             // Footer
-            doc.setFontSize(6);
-            doc.setTextColor(120);
-            doc.text('Auto-generated by AgriSys on ' + new Date().toLocaleString(), 105, sy + 12, { align: 'center' });
-            doc.setTextColor(0);
+            ReceiptPDF.drawReportFooter(doc);
 
             doc.save(`Buyer_Ledger_${buyer.name.replace(/\s+/g, '_')}.pdf`);
             Utils.hideLoading();

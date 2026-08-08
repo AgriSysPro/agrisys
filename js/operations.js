@@ -110,7 +110,9 @@ const OpeningBalances = {
             Utils.showToast('Party name is required', 'error'); return;
         }
 
-        await DB.put('opening_balances', data);
+        const ops = [];
+        ops.push({ storeName: 'opening_balances', action: 'put', data });
+
         if (type === 'farmer_payable' || type === 'farmer_advance') await Farmers.ensureFarmer(data.partyName);
         if (type === 'buyer_receivable' || type === 'buyer_advance') await Buyers.ensureBuyer(data.partyName);
 
@@ -124,19 +126,26 @@ const OpeningBalances = {
                 sourceStore: 'opening_balances',
                 sourceId: data.id
             });
-            if (tx) { data.capitalTxId = tx.id; await DB.put('opening_balances', data); }
-            // Also create a capital_entry so it syncs to Capital section & reports
-            await DB.put('capital_entries', {
-                id: Utils.generateId(),
-                type: 'contribution',
-                amount,
-                date: data.date,
-                description: 'Opening capital balance',
-                accountId: data.accountId,
-                linkedTxId: tx ? tx.id : null,
-                sourceStore: 'opening_balances',
-                sourceId: data.id,
-                createdAt: new Date().toISOString()
+            if (tx) { 
+                data.capitalTxId = tx.id; 
+                // replace the first op since we updated data
+                ops[0] = { storeName: 'opening_balances', action: 'put', data };
+            }
+            ops.push({
+                storeName: 'capital_entries',
+                action: 'put',
+                data: {
+                    id: Utils.generateId(),
+                    type: 'contribution',
+                    amount,
+                    date: data.date,
+                    description: 'Opening capital balance',
+                    accountId: data.accountId,
+                    linkedTxId: tx ? tx.id : null,
+                    sourceStore: 'opening_balances',
+                    sourceId: data.id,
+                    createdAt: new Date().toISOString()
+                }
             });
         }
         if (type === 'stock') {
@@ -151,9 +160,42 @@ const OpeningBalances = {
                 notes: data.notes,
                 createdAt: data.createdAt
             };
-            await DB.put('stock_adjustments', adj);
+            ops.push({ storeName: 'stock_adjustments', action: 'put', data: adj });
         }
-        await Utils.audit('create', 'opening_balance', data.id, { type, newAmount: amount, partyName: data.partyName, crop: data.crop });
+        
+        ops.push({
+            storeName: 'audit_logs', action: 'put', data: {
+                id: Utils.generateId(), date: Utils.todayISO(), action: 'create',
+                entityType: 'opening_balance', entityId: data.id, 
+                details: { type, newAmount: amount, partyName: data.partyName, crop: data.crop },
+                createdAt: new Date().toISOString()
+            }
+        });
+
+        if (typeof CoreServices !== 'undefined') {
+            if (type === 'stock' && data.crop) {
+                const op = await CoreServices.getStockOp(data.crop, weight);
+                if (op) ops.push(op);
+            }
+            if (type === 'farmer_payable' && data.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('farmer', data.partyName, amount);
+                if (op) ops.push(op);
+            }
+            if (type === 'farmer_advance' && data.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('farmer', data.partyName, -amount);
+                if (op) ops.push(op);
+            }
+            if (type === 'buyer_receivable' && data.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('buyer', data.partyName, amount);
+                if (op) ops.push(op);
+            }
+            if (type === 'buyer_advance' && data.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('buyer', data.partyName, -amount);
+                if (op) ops.push(op);
+            }
+        }
+
+        await DB.commitUnitOfWork(ops);
         Utils.hideModal('opening-balance-modal');
         Utils.showToast('Opening balance saved!');
         this.render();
@@ -256,20 +298,63 @@ const OpeningBalances = {
         const linkedPayments = (await DB.getAll('opening_balance_payments')).filter(p => p.openingBalanceId === id);
         const paymentText = linkedPayments.length ? ` ${linkedPayments.length} linked settlement payment(s) and their cash/bank entries will also be removed.` : '';
         if (!await Utils.confirm(`Delete this opening balance? Linked stock/capital entry will also be removed.${paymentText}`)) return;
-        await Utils.deleteLinkedCapitalTx('opening_balances', id);
+        const ops = [];
+        const allCapTxs = await DB.getAll('capital_transactions') || [];
+        
+        const linkedCap = allCapTxs.filter(t => t.sourceStore === 'opening_balances' && t.sourceId === id);
+        for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+        
         for (const payment of linkedPayments) {
-            await Utils.deleteLinkedCapitalTx('opening_balance_payments', payment.id);
-            await DB.delete('opening_balance_payments', payment.id);
+            const linkedPayCap = allCapTxs.filter(t => t.sourceStore === 'opening_balance_payments' && t.sourceId === payment.id);
+            for (const lc of linkedPayCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+            ops.push({ storeName: 'opening_balance_payments', action: 'delete', key: payment.id, softDelete: true, data: payment });
         }
-        if (b.type === 'stock') await DB.delete('stock_adjustments', id);
+
+        if (b.type === 'stock') {
+            const adj = await DB.get('stock_adjustments', id);
+            if (adj) ops.push({ storeName: 'stock_adjustments', action: 'delete', key: id, softDelete: true, data: adj });
+        }
+
         // Clean up linked capital_entries for capital-type opening balances
         if (b.type === 'capital') {
-            const allCapEntries = await DB.getAll('capital_entries');
+            const allCapEntries = await DB.getAll('capital_entries') || [];
             const linked = allCapEntries.filter(e => e.sourceStore === 'opening_balances' && e.sourceId === id);
-            for (const ce of linked) await DB.delete('capital_entries', ce.id);
+            for (const ce of linked) ops.push({ storeName: 'capital_entries', action: 'delete', key: ce.id, softDelete: true, data: ce });
         }
-        await DB.delete('opening_balances', id);
-        await Utils.audit('delete', 'opening_balance', id, { oldAmount: b.amount || 0, oldRecord: b, linkedPayments: linkedPayments.length });
+
+        ops.push({ storeName: 'opening_balances', action: 'delete', key: id, softDelete: true, data: b });
+        ops.push({
+            storeName: 'audit_logs', action: 'put', data: {
+                id: Utils.generateId(), date: Utils.todayISO(), action: 'delete',
+                entityType: 'opening_balance', entityId: id, details: { oldAmount: b.amount || 0, linkedPayments: linkedPayments.length },
+                createdAt: new Date().toISOString()
+            }
+        });
+
+        if (typeof CoreServices !== 'undefined') {
+            if (b.type === 'stock' && b.crop) {
+                const op = await CoreServices.getStockOp(b.crop, -(b.weight || 0));
+                if (op) ops.push(op);
+            }
+            if (b.type === 'farmer_payable' && b.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('farmer', b.partyName, -(b.amount || 0));
+                if (op) ops.push(op);
+            }
+            if (b.type === 'farmer_advance' && b.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('farmer', b.partyName, (b.amount || 0));
+                if (op) ops.push(op);
+            }
+            if (b.type === 'buyer_receivable' && b.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('buyer', b.partyName, -(b.amount || 0));
+                if (op) ops.push(op);
+            }
+            if (b.type === 'buyer_advance' && b.partyName) {
+                const op = await CoreServices.getPartyBalanceOp('buyer', b.partyName, (b.amount || 0));
+                if (op) ops.push(op);
+            }
+        }
+
+        await DB.commitUnitOfWork(ops);
         Utils.showToast('Opening balance deleted!');
         this.render();
     }
@@ -464,8 +549,24 @@ const StockAdjustments = {
         if (!data.crop) { Utils.showToast('Crop is required', 'error'); return; }
         if (data.weight <= 0) { Utils.showToast('Adjustment weight is required', 'error'); return; }
 
-        await DB.put('stock_adjustments', data);
-        await Utils.audit('create', 'stock_adjustment', data.id, { crop: data.crop, direction: data.direction, weight: data.weight, newAmount: data.value });
+        const ops = [];
+        ops.push({ storeName: 'stock_adjustments', action: 'put', data });
+        ops.push({
+            storeName: 'audit_logs', action: 'put', data: {
+                id: Utils.generateId(), date: Utils.todayISO(), action: 'create',
+                entityType: 'stock_adjustment', entityId: data.id, 
+                details: { crop: data.crop, direction: data.direction, weight: data.weight, newAmount: data.value },
+                createdAt: new Date().toISOString()
+            }
+        });
+
+        if (typeof CoreServices !== 'undefined' && data.crop) {
+            const delta = (data.direction === 'in' || data.direction === 'increase' || data.direction === 'opening') ? data.weight : -data.weight;
+            const op = await CoreServices.getStockOp(data.crop, delta);
+            if (op) ops.push(op);
+        }
+
+        await DB.commitUnitOfWork(ops);
         Utils.hideModal('stock-adjustment-modal');
         Utils.showToast('Stock adjustment saved!');
         await this.syncAll();
@@ -476,8 +577,17 @@ const StockAdjustments = {
         if (!adj) return;
         const linkedOpening = await DB.get('opening_balances', id);
         if (!await Utils.confirm(`Delete this stock adjustment?${linkedOpening ? ' The linked opening balance will also be removed.' : ''}`)) return;
-        await DB.delete('stock_adjustments', id);
-        if (linkedOpening) await DB.delete('opening_balances', id);
+        const ops = [];
+        ops.push({ storeName: 'stock_adjustments', action: 'delete', key: id, softDelete: true, data: adj });
+        if (linkedOpening) ops.push({ storeName: 'opening_balances', action: 'delete', key: id, softDelete: true, data: linkedOpening });
+        
+        if (typeof CoreServices !== 'undefined' && adj.crop) {
+            const delta = (adj.direction === 'in' || adj.direction === 'increase' || adj.direction === 'opening') ? -adj.weight : adj.weight;
+            const op = await CoreServices.getStockOp(adj.crop, delta);
+            if (op) ops.push(op);
+        }
+        
+        await DB.commitUnitOfWork(ops);
         await Utils.audit('delete', 'stock_adjustment', id, { oldRecord: adj, oldAmount: adj.value || 0 });
         Utils.showToast('Stock adjustment deleted!');
         await this.syncAll();

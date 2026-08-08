@@ -77,8 +77,14 @@
             <div class="nav-item" data-section="capital-mgmt" onclick="App.navigate('capital-mgmt')">
                 <i data-lucide="coins"></i> Capital
             </div>
+            <div class="nav-item" data-section="partners-mgmt" onclick="App.navigate('partners-mgmt')">
+                <i data-lucide="users-round"></i> Partners & Sharing
+            </div>
             <div class="nav-item" data-section="bank-accounts" onclick="App.navigate('bank-accounts')">
                 <i data-lucide="landmark"></i> Bank Accounts
+            </div>
+            <div class="nav-item" data-section="debts-mgmt" onclick="App.navigate('debts-mgmt')">
+                <i data-lucide="hand-coins"></i> Debts & Loans
             </div>
             <div class="nav-item" data-section="bookkeeping" onclick="App.navigate('bookkeeping')">
                 <i data-lucide="book-open"></i> Bookkeeping
@@ -615,6 +621,137 @@
                     <thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Bank Account</th><th class="text-right">Amount</th><th class="text-right">Running Balance</th><th>Actions</th></tr></thead>
                     <tbody id="capital-mgmt-tbody"></tbody>
                 </table></div>
+            </div>
+        </div>
+
+        <!-- ===== PARTNERS & PROFIT SHARING MANAGEMENT ===== -->
+        <div class="section" id="sec-partners-mgmt">
+            <div class="page-header">
+                <div>
+                    <h1 class="page-title">Partners & Profit Sharing</h1>
+                    <p class="page-title-sub">Manage partners, agreed profit sharing ratios (%), capital contributions, drawings, and profit payouts</p>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="PartnersMgmt.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel Export</button>
+                    <button class="btn btn-secondary" onclick="PartnersMgmt.showAddTx('profit_payout')"><i data-lucide="coins"></i> Record Profit Payout</button>
+                    <button class="btn btn-warning" onclick="PartnersMgmt.showAddTx('drawing')"><i data-lucide="minus-circle"></i> Record Drawing</button>
+                    <button class="btn btn-success" onclick="PartnersMgmt.showAddTx('contribution')"><i data-lucide="plus-circle"></i> Add Contribution</button>
+                    <button class="btn btn-primary" onclick="PartnersMgmt.showAddPartner()"><i data-lucide="user-plus"></i> + Add Partner</button>
+                </div>
+            </div>
+
+            <div class="stats-grid" id="partners-mgmt-stats"></div>
+            
+            <div id="partners-allocation-bar"></div>
+
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <h3 class="card-title">Partners Profile & Equity Summary</h3>
+                    <span style="color:var(--text-muted);font-size:0.85rem">Real-time capital balance and earned profit share allocation per partner</span>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Partner Name & Role</th>
+                                <th>Phone</th>
+                                <th class="text-center">Share (%)</th>
+                                <th class="text-right">Capital Contributed</th>
+                                <th class="text-right">Earned Profit Share</th>
+                                <th class="text-right">Profit Payouts</th>
+                                <th class="text-right">Drawings</th>
+                                <th class="text-right">Net Partner Equity</th>
+                                <th class="text-center">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="partners-summary-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Partner Financial Transactions Ledger</h3>
+                    <span style="color:var(--text-muted);font-size:0.85rem">Chronological record of partner deposits, drawings, and profit payouts</span>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Partner Name</th>
+                                <th>Type</th>
+                                <th>Description / Memo</th>
+                                <th>Linked Bank Account</th>
+                                <th class="text-right">Amount</th>
+                                <th class="text-center">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="partner-tx-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== DEBTS & LOANS MANAGEMENT ===== -->
+        <div class="section" id="sec-debts-mgmt">
+            <div class="page-header">
+                <div>
+                    <h1 class="page-title">Debts & Loans Management</h1>
+                    <p class="page-title-sub">Manage company loans given to farmers, buyers, staff, or external parties without interest</p>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="DebtsMgmt.exportExcel()"><i data-lucide="file-spreadsheet"></i> Excel Export</button>
+                    <button class="btn btn-danger" onclick="DebtsMgmt.showAddModal('given')"><i data-lucide="arrow-up-right"></i> Give Debt / Loan (Outflow)</button>
+                    <button class="btn btn-success" onclick="DebtsMgmt.showAddModal('repaid')"><i data-lucide="arrow-down-left"></i> Receive Repayment (Inflow)</button>
+                </div>
+            </div>
+            
+            <div class="stats-grid" id="debts-mgmt-stats"></div>
+            
+            <div class="card" style="margin-bottom: 24px;">
+                <div class="card-header">
+                    <h3 class="card-title">Borrowers & Debtors Summary</h3>
+                    <span style="color:var(--text-muted);font-size:0.85rem">Net balances per person / party</span>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Party / Person Name</th>
+                                <th class="text-right">Total Given</th>
+                                <th class="text-right">Total Repaid</th>
+                                <th class="text-right">Net Receivable</th>
+                                <th>Status</th>
+                                <th class="text-right">Quick Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="debts-persons-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Interest-Free Loan Transaction Ledger</h3>
+                    <span style="color:var(--text-muted);font-size:0.85rem">Full chronological log of inflows & outflows</span>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Party Name</th>
+                                <th>Type</th>
+                                <th>Bank / Cash Link</th>
+                                <th>Notes</th>
+                                <th class="text-right">Amount (PKR)</th>
+                                <th class="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="debts-tx-tbody"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -1287,6 +1424,168 @@
     </div>
 </div>
 
+<!-- Debts & Loans Modal -->
+<div class="modal-overlay" id="debt-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="debt-modal-title">Give Debt / Loan</h3>
+            <button class="modal-close" onclick="Utils.hideModal('debt-modal')">×</button>
+        </div>
+        <div class="modal-body">
+            <div style="background: rgba(16, 185, 129, 0.08); border-left: 3px solid var(--accent-success); padding: 10px 14px; border-radius: 4px; margin-bottom: 16px; font-size: 0.85rem;">
+                <strong>Note:</strong> All company loans and debts are recorded as interest-free transactions.
+            </div>
+            <input type="hidden" id="debt-id" value="">
+            <input type="hidden" id="debt-type" value="given">
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label class="form-label">Party / Person Name <span class="required">*</span> <span style="font-weight:normal;color:var(--text-muted)">(Select existing farmer/buyer or type any new name)</span></label>
+                    <input class="form-input" id="debt-person" list="debt-persons-list" placeholder="e.g., Ali (Farmer), Ahmed (Staff), etc.">
+                    <datalist id="debt-persons-list"></datalist>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Amount (PKR) <span class="required">*</span></label>
+                    <input class="form-input" type="number" id="debt-amount" step="0.01" placeholder="0.00">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Date <span class="required">*</span></label>
+                    <input class="form-input" type="date" id="debt-date">
+                </div>
+                <div class="form-group full-width">
+                    <label class="form-label">Link to Bank / Cash Account <span style="color:var(--text-muted);font-weight:normal">(Creates matching cash inflow/outflow)</span></label>
+                    <select class="form-select" id="debt-account"></select>
+                </div>
+                <div class="form-group full-width">
+                    <label class="form-label">Notes / Purpose</label>
+                    <input class="form-input" id="debt-notes" placeholder="e.g., Advance loan for seeds, Medical assistance">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="Utils.hideModal('debt-modal')">Cancel</button>
+            <button class="btn btn-primary" onclick="DebtsMgmt.saveEntry()">Save Transaction</button>
+        </div>
+    </div>
+</div>
+
+<!-- PARTNER PROFILE & SHARE MODAL -->
+<div class="modal-overlay" id="partner-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="partner-modal-title">Add New Partner & Profit Ratio</h3>
+            <button class="modal-close" onclick="Utils.hideModal('partner-modal')">×</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="partner-edit-id">
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label class="form-label">Partner Name *</label>
+                    <input class="form-input" id="partner-input-name" placeholder="e.g. Ali Reza">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Role / Designation</label>
+                    <input class="form-input" id="partner-input-role" placeholder="e.g. Managing Partner, Sleeping Partner" value="Managing Partner">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Profit Share Percentage (%) *</label>
+                    <input class="form-input" type="number" id="partner-input-share" placeholder="e.g. 50" step="0.1" min="0" max="100">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Phone Number</label>
+                    <input class="form-input" id="partner-input-phone" placeholder="e.g. 0300-1234567">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Address</label>
+                    <input class="form-input" id="partner-input-address" placeholder="e.g. Multan, Pakistan">
+                </div>
+                <div class="form-group full-width">
+                    <label class="form-label">Additional Notes</label>
+                    <input class="form-input" id="partner-input-notes" placeholder="Optional notes regarding partnership agreement...">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="Utils.hideModal('partner-modal')">Cancel</button>
+            <button class="btn btn-primary" onclick="PartnersMgmt.savePartner()">Save Partner</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="partner-tx-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="partner-tx-title">Record Partner Transaction</h3>
+            <button class="modal-close" onclick="Utils.hideModal('partner-tx-modal')">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label class="form-label">Transaction Type *</label>
+                    <select class="form-select" id="partner-tx-type" onchange="PartnersMgmt.onTxTypeChange()">
+                        <option value="contribution">Capital Contribution (+ Deposit / Inflow)</option>
+                        <option value="drawing">Personal Drawing (− Withdrawal / Outflow)</option>
+                        <option value="profit_payout">Profit Share Payout (− Distribution / Outflow)</option>
+                    </select>
+                </div>
+                <div class="form-group full-width">
+                    <label class="form-label">Select Partner *</label>
+                    <select class="form-select" id="partner-tx-partner"></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Amount (PKR) *</label>
+                    <input class="form-input" type="number" id="partner-tx-amount" placeholder="0.00" min="1" step="any">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Date *</label>
+                    <input class="form-input" type="date" id="partner-tx-date">
+                </div>
+                <div class="form-group full-width">
+                    <label class="form-label">Link to Bank / Cash Account <span style="color:var(--text-muted);font-weight:normal">(Synchronizes account balance)</span></label>
+                    <select class="form-select" id="partner-tx-account"></select>
+                </div>
+                <div class="form-group full-width">
+                    <label class="form-label">Description / Memo</label>
+                    <input class="form-input" id="partner-tx-desc" placeholder="e.g. Initial capital deposit, Q3 profit withdrawal...">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="Utils.hideModal('partner-tx-modal')">Cancel</button>
+            <button class="btn btn-primary" onclick="PartnersMgmt.saveTx()">Save Transaction</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="partner-ledger-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title" id="partner-ledger-title">Partner Account Statement</h3>
+            <button class="modal-close" onclick="Utils.hideModal('partner-ledger-modal')">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Type</th>
+                            <th>Description / Memo</th>
+                            <th class="text-right">Contributions (+)</th>
+                            <th class="text-right">Withdrawals (−)</th>
+                            <th class="text-right">Running Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody id="partner-ledger-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-footer" style="justify-content: space-between;">
+            <div id="partner-ledger-actions"></div>
+            <button class="btn btn-ghost" onclick="Utils.hideModal('partner-ledger-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Scripts -->
 <script src="js/utils.js"></script>
 <script src="js/db.js"></script>
@@ -1300,6 +1599,8 @@
 <script src="js/expenses.js"></script>
 <script src="js/capital.js"></script>
 <script src="js/capital-mgmt.js"></script>
+<script src="js/partners.js"></script>
+<script src="js/debts.js"></script>
 <script src="js/bookkeeping.js"></script>
 <script src="js/reports.js"></script>
 <script src="js/pdf.js"></script>
@@ -1308,6 +1609,7 @@
 <script src="js/operations.js"></script>
 <script src="js/crop-analysis.js"></script>
 <script src="js/backup-manager.js"></script>
+<script src="js/CoreServices.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

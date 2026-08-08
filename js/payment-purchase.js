@@ -72,7 +72,7 @@ const PurchasePayments = {
             <td>${Utils.escapeHTML(p.farmerName)}</td>
             <td>${Utils.escapeHTML(p.purchaseId || 'General')}</td>
             <td><span class="badge badge-info">${Utils.escapeHTML((p.mode || 'cash').toUpperCase())}</span></td>
-            <td class="text-right font-bold">PKR ${Utils.formatPKR(p.amount || 0)}</td>
+            <td class="text-right font-bold">PKR ${Utils.formatPKR(p.totalPaidCash || ((p.amount || 0) + (p.excessAdvance || 0)))}${p.excessAdvance ? ` <span style="color:var(--accent-warning);font-size:11px;display:block;">(+ PKR ${Utils.formatPKR(p.excessAdvance)} Adv)</span>` : ''}</td>
             <td>${Utils.escapeHTML(accountMap[p.accountId] || '-')}</td>
             <td><div class="table-actions">
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="PurchasePayments.shareWhatsApp('${p.id}')" title="Share via WhatsApp">📱</button>
@@ -102,21 +102,8 @@ const PurchasePayments = {
         window.open(`https://wa.me/?text=${encoded}`, '_blank');
     },
 
-    async getFarmerAvailableAdvance(farmerName) {
-        if (!farmerName) return 0;
-        const fn = farmerName.trim().toLowerCase();
-        const advances = await DB.getAll('farmer_advances');
-        const openings = await DB.getAll('opening_balances');
-        const purchases = await DB.getAll('purchases');
-        const payments = await DB.getAll('purchase_payments');
-
-        const totalAdv = advances.filter(a => a.farmerName && a.farmerName.trim().toLowerCase() === fn).reduce((s, a) => s + (a.amount || 0), 0) +
-            openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').trim().toLowerCase() === fn).reduce((s, o) => s + (o.amount || 0), 0);
-
-        const recoveredInPurchases = purchases.filter(p => p.farmerName && p.farmerName.trim().toLowerCase() === fn).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-        const adjustedInPayments = payments.filter(p => p.farmerName && p.farmerName.trim().toLowerCase() === fn).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-
-        return Math.max(0, totalAdv - recoveredInPurchases - adjustedInPayments);
+    async getFarmerAvailableAdvance(farmerName, excludePaymentId = null) {
+        return await Utils.getFarmerAvailableAdvance(farmerName, { excludePaymentId });
     },
 
     calculateModalTotals() {
@@ -156,7 +143,7 @@ const PurchasePayments = {
         document.getElementById('pay-modal-title').textContent = `Pay Farmer: ${p.farmerName} (${p.id})`;
         document.getElementById('pay-receipt-id').value = await Utils.getNextReceiptId('payment');
         document.getElementById('pay-amount').value = balance.toFixed(2);
-        document.getElementById('pay-amount').max = balance;
+        document.getElementById('pay-amount').removeAttribute('max');
         document.getElementById('pay-date').value = Utils.todayISO();
         document.getElementById('pay-ref').value = '';
         document.getElementById('pay-notes').value = '';
@@ -194,9 +181,16 @@ const PurchasePayments = {
                 const netCash = Math.max(0, payAmt - advDeduct);
 
                 if (payAmt <= 0) { Utils.showToast('Payment amount must be > 0', 'error'); return; }
-                if (payAmt > currentBalance) { Utils.showToast('Payment cannot exceed remaining purchase balance', 'error'); return; }
                 if (advDeduct > openAdv) { Utils.showToast('Advance adjustment cannot exceed available open advance', 'error'); return; }
+                if (advDeduct > currentBalance) { Utils.showToast('Advance adjustment cannot exceed remaining purchase balance', 'error'); return; }
                 if (netCash > 0 && !document.getElementById('pay-account').value) { Utils.showToast('Select cash/bank account for the cash portion', 'error'); return; }
+
+                let invoicePayAmt = payAmt;
+                let excessAdv = 0;
+                if (payAmt > currentBalance && currentBalance >= 0) {
+                    excessAdv = payAmt - currentBalance;
+                    invoicePayAmt = currentBalance;
+                }
 
                 const receiptNo = document.getElementById('pay-receipt-id').value;
                 const previousBalance = currentBalance;
@@ -207,27 +201,49 @@ const PurchasePayments = {
                     receiptNo,
                     purchaseId,
                     farmerName: currentP.farmerName,
-                    amount: payAmt,
+                    amount: invoicePayAmt,
+                    totalPaidCash: payAmt,
+                    excessAdvance: excessAdv,
                     advanceDeducted: advDeduct,
                     netCashAmount: netCash,
                     date: document.getElementById('pay-date').value,
                     mode: document.getElementById('pay-mode').value,
                     reference: document.getElementById('pay-ref').value.trim(),
-                    notes: document.getElementById('pay-notes').value.trim(),
+                    notes: document.getElementById('pay-notes').value.trim() + (excessAdv > 0 ? ` (Included PKR ${Utils.formatPKR(excessAdv)} excess added to advance)` : ''),
                     accountId: document.getElementById('pay-account').value,
                     previousBalance,
-                    newBalance: previousBalance - payAmt,
+                    newBalance: Math.max(0, previousBalance - invoicePayAmt),
                     capitalTxId: txId,
                     createdAt: new Date().toISOString()
                 };
 
-                currentP.amountPaid = (currentP.amountPaid || 0) + payAmt;
+                const ops = [];
+
+                currentP.amountPaid = (currentP.amountPaid || 0) + invoicePayAmt;
                 const total = currentP.netPayableAmount || currentP.amount || 0;
                 currentP.balance = total - currentP.amountPaid;
                 currentP.paymentStatus = currentP.amountPaid >= total ? 'paid' : 'partial';
 
-                await DB.put('purchases', currentP);
-                await DB.put('purchase_payments', payment);
+                ops.push({ storeName: 'purchases', action: 'put', data: currentP });
+
+                if (excessAdv > 0) {
+                    const advId = Utils.generateId();
+                    const advRecord = {
+                        id: advId,
+                        farmerName: currentP.farmerName,
+                        amount: excessAdv,
+                        date: document.getElementById('pay-date').value,
+                        notes: `Excess overpayment added to advance from payment ${receiptNo} (Purchase #${currentP.id})`,
+                        accountId: document.getElementById('pay-account').value || '',
+                        sourceStore: 'purchase_payments',
+                        sourceId: payment.id,
+                        createdAt: new Date().toISOString()
+                    };
+                    ops.push({ storeName: 'farmer_advances', action: 'put', data: advRecord });
+                    payment.advanceCreatedId = advId;
+                }
+
+                ops.push({ storeName: 'purchase_payments', action: 'put', data: payment });
 
                 if (netCash > 0) {
                     const capitalTx = {
@@ -238,16 +254,25 @@ const PurchasePayments = {
                         date: document.getElementById('pay-date').value,
                         category: 'farmer_payment',
                         referenceId: payment.id,
-                        notes: `Farmer payment to ${currentP.farmerName} for ${currentP.id} (Receipt: ${receiptNo})`,
+                        notes: `Farmer payment to ${currentP.farmerName} for ${currentP.id} (Receipt: ${receiptNo})${excessAdv > 0 ? ` [Incl. PKR ${Utils.formatPKR(excessAdv)} added to advance]` : ''}`,
                         createdAt: new Date().toISOString()
                     };
-                    await DB.put('capital_transactions', capitalTx);
+                    ops.push({ storeName: 'capital_transactions', action: 'put', data: capitalTx });
                 }
 
-                await Utils.audit('create', 'purchase_payment', payment.id, { newAmount: payAmt, farmer: currentP.farmerName });
+                if (typeof CoreServices !== 'undefined' && currentP.farmerName) {
+                    const op = await CoreServices.getPartyBalanceOp('farmer', currentP.farmerName, -netCash);
+                    if (op) ops.push(op);
+                }
+
+                await DB.commitUnitOfWork(ops);
+
+                await Utils.audit('create', 'purchase_payment', payment.id, { newAmount: invoicePayAmt, excessAdvance: excessAdv, farmer: currentP.farmerName });
 
                 Utils.hideModal('payment-modal');
-                Utils.showToast(advDeduct > 0 ? `Payment saved! Adjusted PKR ${Utils.formatPKR(advDeduct)} from open advance.` : 'Payment saved!');
+                let toastMsg = advDeduct > 0 ? `Payment saved! Adjusted PKR ${Utils.formatPKR(advDeduct)} from open advance.` : 'Payment saved!';
+                if (excessAdv > 0) toastMsg += ` PKR ${Utils.formatPKR(excessAdv)} excess transferred to Farmer Advances!`;
+                Utils.showToast(toastMsg);
                 await this.render();
 
                 if (printAfterSave) {
@@ -366,6 +391,8 @@ const PurchasePayments = {
                 .filter(p => p.farmerName && p.farmerName.trim().toLowerCase() === fn && p.paymentStatus !== 'paid')
                 .sort((a, b) => new Date(a.date) - new Date(b.date));
 
+            const ops = [];
+
             for (const p of purchases) {
                 if (remainingToDistribute <= 0) break;
                 const pBal = (p.netPayableAmount || p.amount || 0) - (p.amountPaid || 0);
@@ -373,8 +400,15 @@ const PurchasePayments = {
                 p.amountPaid = (p.amountPaid || 0) + alloc;
                 p.balance = (p.netPayableAmount || p.amount || 0) - p.amountPaid;
                 p.paymentStatus = p.amountPaid >= (p.netPayableAmount || p.amount || 0) ? 'paid' : 'partial';
-                await DB.put('purchases', p);
+                ops.push({ storeName: 'purchases', action: 'put', data: p });
                 remainingToDistribute -= alloc;
+            }
+
+            let excessAdv = 0;
+            let invoicePayAmt = payAmt;
+            if (remainingToDistribute > 0) {
+                excessAdv = remainingToDistribute;
+                invoicePayAmt = payAmt - excessAdv;
             }
 
             const payment = {
@@ -382,19 +416,38 @@ const PurchasePayments = {
                 receiptNo,
                 purchaseId: purchases.length ? purchases[0].id : 'General',
                 farmerName: name,
-                amount: payAmt,
+                amount: invoicePayAmt,
+                totalPaidCash: payAmt,
+                excessAdvance: excessAdv,
                 advanceDeducted: advDeduct,
                 netCashAmount: netCash,
                 date: document.getElementById('dpay-date').value,
                 mode: document.getElementById('dpay-mode').value,
                 reference: document.getElementById('dpay-ref').value.trim(),
-                notes: `General farmer payment & advance settlement for ${name}`,
+                notes: `General farmer payment & advance settlement for ${name}` + (excessAdv > 0 ? ` (Incl. PKR ${Utils.formatPKR(excessAdv)} added to open advances)` : ''),
                 accountId: document.getElementById('dpay-account').value,
                 capitalTxId: txId,
                 createdAt: new Date().toISOString()
             };
 
-            await DB.put('purchase_payments', payment);
+            if (excessAdv > 0) {
+                const advId = Utils.generateId();
+                const advRecord = {
+                    id: advId,
+                    farmerName: name,
+                    amount: excessAdv,
+                    date: document.getElementById('dpay-date').value,
+                    notes: `Excess general payment transferred to advances (Receipt: ${receiptNo})`,
+                    accountId: document.getElementById('dpay-account').value || '',
+                    sourceStore: 'purchase_payments',
+                    sourceId: payment.id,
+                    createdAt: new Date().toISOString()
+                };
+                ops.push({ storeName: 'farmer_advances', action: 'put', data: advRecord });
+                payment.advanceCreatedId = advId;
+            }
+            
+            ops.push({ storeName: 'purchase_payments', action: 'put', data: payment });
 
             if (netCash > 0) {
                 const capitalTx = {
@@ -405,16 +458,25 @@ const PurchasePayments = {
                     date: document.getElementById('dpay-date').value,
                     category: 'farmer_payment',
                     referenceId: payment.id,
-                    notes: `General farmer payment to ${name} (Receipt: ${receiptNo})`,
+                    notes: `General farmer payment to ${name} (Receipt: ${receiptNo})${excessAdv > 0 ? ` [Incl. PKR ${Utils.formatPKR(excessAdv)} added to advance]` : ''}`,
                     createdAt: new Date().toISOString()
                 };
-                await DB.put('capital_transactions', capitalTx);
+                ops.push({ storeName: 'capital_transactions', action: 'put', data: capitalTx });
             }
 
-            await Utils.audit('create', 'purchase_payment', payment.id, { newAmount: payAmt, farmer: name });
+            if (typeof CoreServices !== 'undefined' && name) {
+                const op = await CoreServices.getPartyBalanceOp('farmer', name, -netCash);
+                if (op) ops.push(op);
+            }
+
+            await DB.commitUnitOfWork(ops);
+
+            await Utils.audit('create', 'purchase_payment', payment.id, { newAmount: invoicePayAmt, excessAdvance: excessAdv, farmer: name });
 
             Utils.hideModal('direct-pay-modal');
-            Utils.showToast(`General payment saved! Adjusted PKR ${Utils.formatPKR(advDeduct)} from open advance.`);
+            let toastMsg = advDeduct > 0 ? `General payment saved! Adjusted PKR ${Utils.formatPKR(advDeduct)} from open advance.` : 'General payment saved!';
+            if (excessAdv > 0) toastMsg += ` PKR ${Utils.formatPKR(excessAdv)} excess transferred to Farmer Advances!`;
+            Utils.showToast(toastMsg);
             await this.render();
         } catch (e) {
             Utils.showToast('Failed to save payment: ' + e.message, 'error');
@@ -434,7 +496,7 @@ const PurchasePayments = {
         document.getElementById('pay-modal-title').textContent = `Edit Farmer Payment: ${p.farmerName} (${p.id})`;
         document.getElementById('pay-receipt-id').value = payment.receiptNo || payment.id;
         document.getElementById('pay-amount').value = (payment.amount || 0).toFixed(2);
-        document.getElementById('pay-amount').max = maxAllowed;
+        document.getElementById('pay-amount').removeAttribute('max');
         document.getElementById('pay-date').value = payment.date || Utils.todayISO();
         document.getElementById('pay-mode').value = payment.mode || 'cash';
         document.getElementById('pay-ref').value = payment.reference || '';
@@ -442,7 +504,7 @@ const PurchasePayments = {
         await Utils.populateCapitalAccountSelect('pay-account', 'Select cash/bank account');
         document.getElementById('pay-account').value = payment.accountId || '';
 
-        const openAdv = await this.getFarmerAvailableAdvance(p.farmerName) + (payment.advanceDeducted || 0);
+        const openAdv = await this.getFarmerAvailableAdvance(p.farmerName, payment.id) + (payment.advanceDeducted || 0);
         this.currentOpenAdvance = openAdv;
         const advBox = document.getElementById('pay-advance-box');
         const advInput = document.getElementById('pay-deduct-advance');
@@ -478,11 +540,32 @@ const PurchasePayments = {
                 if (netCash > 0 && !document.getElementById('pay-account').value) { Utils.showToast('Select cash/bank account for this payment', 'error'); return; }
 
                 const oldPayment = { ...payment };
+                const ops = [];
+
                 if (payment.capitalTxId) {
-                    await Utils.deleteLinkedCapitalTx('purchase_payments', payment.id);
+                    const allCapTxs = await DB.getAll('capital_transactions') || [];
+                    const linkedCap = allCapTxs.filter(t => t.sourceStore === 'purchase_payments' && t.sourceId === payment.id);
+                    for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
+                }
+                if (payment.advanceCreatedId) {
+                    const adv = await DB.get('farmer_advances', payment.advanceCreatedId);
+                    if (adv) ops.push({ storeName: 'farmer_advances', action: 'delete', key: payment.advanceCreatedId, softDelete: true, data: adv });
+                } else {
+                    const allAdvs = await DB.getAll('farmer_advances');
+                    const linked = allAdvs.filter(a => a.sourceStore === 'purchase_payments' && a.sourceId === payment.id);
+                    for (const l of linked) ops.push({ storeName: 'farmer_advances', action: 'delete', key: l.id, softDelete: true, data: l });
                 }
 
-                payment.amount = newAmount;
+                let invoicePayAmt = newAmount;
+                let excessAdv = 0;
+                if (newAmount > currentMaxAllowed && currentMaxAllowed >= 0) {
+                    excessAdv = newAmount - currentMaxAllowed;
+                    invoicePayAmt = currentMaxAllowed;
+                }
+
+                payment.amount = invoicePayAmt;
+                payment.totalPaidCash = newAmount;
+                payment.excessAdvance = excessAdv;
                 payment.advanceDeducted = advDeduct;
                 payment.netCashAmount = netCash;
                 payment.date = document.getElementById('pay-date').value;
@@ -491,7 +574,7 @@ const PurchasePayments = {
                 payment.notes = document.getElementById('pay-notes').value.trim();
                 payment.accountId = document.getElementById('pay-account').value;
                 const previousBalance = currentTotal - currentPaidWithoutThis;
-                payment.newBalance = previousBalance - newAmount;
+                payment.newBalance = Math.max(0, previousBalance - invoicePayAmt);
 
                 if (netCash > 0) {
                     const capitalTx = {
@@ -505,17 +588,44 @@ const PurchasePayments = {
                         notes: `Farmer payment to ${currentP.farmerName} for ${currentP.id}`,
                         createdAt: new Date().toISOString()
                     };
-                    await DB.put('capital_transactions', capitalTx);
+                    ops.push({ storeName: 'capital_transactions', action: 'put', data: capitalTx });
                     payment.capitalTxId = capitalTx.id;
                 } else {
                     payment.capitalTxId = null;
                 }
 
-                await DB.put('purchase_payments', payment);
-                currentP.amountPaid = currentPaidWithoutThis + newAmount;
+                if (excessAdv > 0) {
+                    const advId = Utils.generateId();
+                    const advRecord = {
+                        id: advId,
+                        farmerName: currentP.farmerName,
+                        amount: excessAdv,
+                        date: payment.date,
+                        notes: `Excess overpayment added to advance from edited payment ${payment.receiptNo || payment.id}`,
+                        accountId: payment.accountId || '',
+                        sourceStore: 'purchase_payments',
+                        sourceId: payment.id,
+                        createdAt: new Date().toISOString()
+                    };
+                    ops.push({ storeName: 'farmer_advances', action: 'put', data: advRecord });
+                    payment.advanceCreatedId = advId;
+                }
+                
+                ops.push({ storeName: 'purchase_payments', action: 'put', data: payment });
+
+                currentP.amountPaid = currentPaidWithoutThis + invoicePayAmt;
                 currentP.balance = currentTotal - currentP.amountPaid;
                 currentP.paymentStatus = currentP.amountPaid >= currentTotal ? 'paid' : 'partial';
-                await DB.put('purchases', currentP);
+                ops.push({ storeName: 'purchases', action: 'put', data: currentP });
+                
+                if (typeof CoreServices !== 'undefined' && currentP.farmerName) {
+                    const oldNetCash = oldPayment.netCashAmount || oldPayment.totalPaidCash || oldPayment.amount || 0;
+                    const delta = oldNetCash - netCash;
+                    const op = await CoreServices.getPartyBalanceOp('farmer', currentP.farmerName, delta);
+                    if (op) ops.push(op);
+                }
+
+                await DB.commitUnitOfWork(ops);
 
                 await Utils.audit('update', 'purchase_payment', payment.id, { oldPayment, newPayment: payment });
 
@@ -541,15 +651,35 @@ const PurchasePayments = {
         const p = await DB.get('purchases', payment.purchaseId);
         if (!p) return;
         if (!await Utils.confirm(`Delete farmer payment ${payment.receiptNo || payment.id} for PKR ${Utils.formatPKR(payment.amount || 0)}? Linked capital transaction will be reversed.`)) return;
+        const ops = [];
         if (payment.capitalTxId) {
-            await Utils.deleteLinkedCapitalTx('purchase_payments', payment.id);
+            const allCapTxs = await DB.getAll('capital_transactions') || [];
+            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'purchase_payments' && t.sourceId === payment.id);
+            for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
         }
-        await DB.delete('purchase_payments', payment.id);
+        if (payment.advanceCreatedId) {
+            const adv = await DB.get('farmer_advances', payment.advanceCreatedId);
+            if (adv) ops.push({ storeName: 'farmer_advances', action: 'delete', key: payment.advanceCreatedId, softDelete: true, data: adv });
+        } else {
+            const allAdvs = await DB.getAll('farmer_advances');
+            const linked = allAdvs.filter(a => a.sourceStore === 'purchase_payments' && a.sourceId === payment.id);
+            for (const l of linked) ops.push({ storeName: 'farmer_advances', action: 'delete', key: l.id, softDelete: true, data: l });
+        }
+        ops.push({ storeName: 'purchase_payments', action: 'delete', key: payment.id, softDelete: true, data: payment });
+        
         const total = p.netPayableAmount || p.amount || 0;
         p.amountPaid = Math.max(0, (p.amountPaid || 0) - (payment.amount || 0));
         p.balance = total - p.amountPaid;
         p.paymentStatus = p.amountPaid >= total ? 'paid' : (p.amountPaid > 0 ? 'partial' : 'pending');
-        await DB.put('purchases', p);
+        ops.push({ storeName: 'purchases', action: 'put', data: p });
+        
+        if (typeof CoreServices !== 'undefined' && p.farmerName) {
+            const oldNetCash = payment.netCashAmount || payment.totalPaidCash || payment.amount || 0;
+            const op = await CoreServices.getPartyBalanceOp('farmer', p.farmerName, oldNetCash);
+            if (op) ops.push(op);
+        }
+        
+        await DB.commitUnitOfWork(ops);
         await Utils.audit('delete', 'purchase_payment', payment.id, { oldAmount: payment.amount || 0, oldRecord: payment });
         Utils.showToast('Payment deleted!');
         await this.render();

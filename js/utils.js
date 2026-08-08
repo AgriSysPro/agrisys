@@ -50,24 +50,43 @@ const Utils = {
     // Generate sequential ID with prefix (P-0001, S-0001)
     async generateSequentialId(prefix) {
         const key = `seq_${prefix}`;
-        let seq = (await DB.getSetting(key)) || 0;
-        seq++;
-        await DB.setSetting(key, seq);
-        return `${prefix}-${String(seq).padStart(4, '0')}`;
+        return new Promise((resolve, reject) => {
+            DB.transact(['settings'], 'readwrite', (stores) => {
+                const store = stores['settings'];
+                const req = store.get(key);
+                req.onsuccess = () => {
+                    let seq = (req.result && req.result.value) ? req.result.value : 0;
+                    seq++;
+                    store.put({ key, value: seq }).onsuccess = () => {
+                        resolve(`${prefix}-${String(seq).padStart(4, '0')}`);
+                    };
+                };
+                req.onerror = () => reject(req.error);
+            });
+        });
     },
 
     async getNextReceiptId(type) {
         const key = `seq_${type}`;
-        let seq = (await DB.getSetting(key)) || 100000;
-        return (seq + 1).toString();
+        return new Promise((resolve, reject) => {
+            DB.transact(['settings'], 'readwrite', (stores) => {
+                const store = stores['settings'];
+                const req = store.get(key);
+                req.onsuccess = () => {
+                    let seq = (req.result && req.result.value) ? req.result.value : 100000;
+                    seq++; // Reserve immediately
+                    store.put({ key, value: seq }).onsuccess = () => {
+                        resolve(seq.toString());
+                    };
+                };
+                req.onerror = () => reject(req.error);
+            });
+        });
     },
 
     async confirmReceiptId(type, idUsed) {
-        const key = `seq_${type}`;
-        let seq = (await DB.getSetting(key)) || 100000;
-        if (idUsed === (seq + 1).toString()) {
-            await DB.setSetting(key, seq + 1);
-        }
+        // No longer needed as getNextReceiptId now reserves atomically. Kept for backward compatibility.
+        return Promise.resolve();
     },
 
     // Generate a random 6-digit number
@@ -99,13 +118,40 @@ const Utils = {
         return parseFloat(num).toFixed(decimals);
     },
 
+    // ===== Integer-Scaled Financial Math Utilities =====
+    toPaisa(val) {
+        return Math.round((parseFloat(val) || 0) * 100);
+    },
+    fromPaisa(paisas) {
+        return paisas / 100;
+    },
+    sumMoney(...values) {
+        let sum = 0;
+        for (const val of values) sum += this.toPaisa(val);
+        return this.fromPaisa(sum);
+    },
+    sumBy(array, iteratee) {
+        if (!array || !array.length) return 0;
+        let sum = 0;
+        for (const item of array) {
+            let val = typeof iteratee === 'function' ? iteratee(item) : item[iteratee];
+            sum += this.toPaisa(val);
+        }
+        return this.fromPaisa(sum);
+    },
+    addMoney(a, b) {
+        return this.fromPaisa(this.toPaisa(a) + this.toPaisa(b));
+    },
+    subMoney(a, b) {
+        return this.fromPaisa(this.toPaisa(a) - this.toPaisa(b));
+    },
+    mulMoney(a, multiplier) {
+        return this.fromPaisa(Math.round(this.toPaisa(a) * (parseFloat(multiplier) || 0)));
+    },
+
     // Round to 2 decimal places using scaled integer math (Paisas) to prevent floating point drift
     roundCurrency(num) {
-        if (num === null || num === undefined || isNaN(num)) return 0;
-        const parsed = parseFloat(num);
-        if (isNaN(parsed)) return 0;
-        const paisas = Math.round((parsed + Number.EPSILON) * 100);
-        return paisas / 100;
+        return this.fromPaisa(this.toPaisa(num));
     },
 
     // Format date to local format
@@ -444,6 +490,41 @@ const Utils = {
         });
     },
 
+    async getFarmerAvailableAdvance(farmerName, options = {}) {
+        if (!farmerName) return 0;
+        const fn = farmerName.trim().toLowerCase();
+        const activeSeason = options.season !== undefined ? options.season : await this.getActiveSeason();
+        const untilDate = options.untilDate || null;
+
+        let advances = this.filterBySeason(await DB.getAll('farmer_advances'), activeSeason);
+        let openings = this.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        let purchases = this.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        let payments = this.filterBySeason(await DB.getAll('purchase_payments'), activeSeason);
+
+        if (untilDate) {
+            advances = advances.filter(a => (a.date || '') <= untilDate);
+            openings = openings.filter(o => (o.date || '') <= untilDate);
+            purchases = purchases.filter(p => (p.date || '') <= untilDate);
+            payments = payments.filter(p => (p.date || '') <= untilDate);
+        }
+
+        const totalAdv = advances
+            .filter(a => (a.farmerName || '').trim().toLowerCase() === fn && (a.amount || 0) > 0 && (!options.excludeAdvanceId || a.id !== options.excludeAdvanceId))
+            .reduce((s, a) => s + (a.amount || 0), 0) +
+            openings
+            .filter(o => o.type === 'farmer_advance' && (o.partyName || '').trim().toLowerCase() === fn)
+            .reduce((s, o) => s + (o.amount || 0), 0);
+
+        const recoveredInPurchases = purchases
+            .filter(p => (p.farmerName || '').trim().toLowerCase() === fn && (!options.excludePurchaseId || p.id !== options.excludePurchaseId))
+            .reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+        const adjustedInPayments = payments
+            .filter(p => (p.farmerName || '').trim().toLowerCase() === fn && (!options.excludePaymentId || p.id !== options.excludePaymentId))
+            .reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+
+        return Math.max(0, totalAdv - recoveredInPurchases - adjustedInPayments);
+    },
+
     async buildFarmerLedger(farmer, options = {}) {
         const activeSeason = await this.getActiveSeason();
         const from = options.from || '';
@@ -537,6 +618,22 @@ const Utils = {
             });
         });
 
+        const debts = this.filterBySeason(await DB.getAll('company_debts'), activeSeason)
+            .filter(d => (d.personName || '').trim().toLowerCase() === fNameLower);
+        debts.forEach(d => {
+            transactions.push({
+                rawDate: d.date || d.createdAt,
+                createdAt: d.createdAt,
+                sortKey: `4-debt-${d.id}`,
+                date: this.formatDate(d.date),
+                ref: d.id,
+                type: d.type === 'given' ? 'Loan Issued' : 'Loan Repayment',
+                description: `Debt / Loan: ${d.type === 'given' ? 'Loan Issued' : 'Repayment Received'}${d.notes ? ' (' + d.notes + ')' : ''}`,
+                debit: d.type === 'given' ? (d.amount || 0) : 0,
+                credit: d.type === 'repaid' ? (d.amount || 0) : 0
+            });
+        });
+
         let scopedTransactions = transactions;
         if (from) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
         if (to) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') <= to);
@@ -550,8 +647,7 @@ const Utils = {
             balance += (t.credit || 0) - (t.debit || 0);
             return { ...t, balance };
         });
-        const openAdvances = advances.reduce((sum, a) => sum + (a.amount || 0), 0) +
-            openings.filter(o => o.type === 'farmer_advance').reduce((sum, o) => sum + (o.amount || 0), 0);
+        const openAdvances = await this.getFarmerAvailableAdvance(farmerName, { season: activeSeason, untilDate: to || null });
 
         return {
             partyName: farmerName,
@@ -660,6 +756,22 @@ const Utils = {
                 description: `Receipt against opening balance (${(pay.mode || 'Cash').toUpperCase()})${pay.reference ? ' Ref: ' + pay.reference : ''}`,
                 debit: 0,
                 credit: pay.amount || 0
+            });
+        });
+
+        const debts = this.filterBySeason(await DB.getAll('company_debts'), activeSeason)
+            .filter(d => (d.personName || '').trim().toLowerCase() === bNameLower);
+        debts.forEach(d => {
+            transactions.push({
+                rawDate: d.date || d.createdAt,
+                createdAt: d.createdAt,
+                sortKey: `4-debt-${d.id}`,
+                date: this.formatDate(d.date),
+                ref: d.id,
+                type: d.type === 'given' ? 'Loan Issued' : 'Loan Repayment',
+                description: `Debt / Loan: ${d.type === 'given' ? 'Loan Issued' : 'Repayment Received'}${d.notes ? ' (' + d.notes + ')' : ''}`,
+                debit: d.type === 'given' ? (d.amount || 0) : 0,
+                credit: d.type === 'repaid' ? (d.amount || 0) : 0
             });
         });
 

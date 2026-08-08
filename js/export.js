@@ -88,6 +88,32 @@ const ExportUtils = {
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bs), 'Buyers');
         }
 
+        const debts = Utils.filterBySeason(await DB.getAll('company_debts') || [], activeSeason);
+        if (debts.length) {
+            const ds = debts.map(d => ({
+                ID: d.id, Date: d.date, Party: d.personName, Type: d.type === 'given' ? 'Loan Issued' : 'Repayment Received',
+                Amount: d.amount, Notes: d.notes || ''
+            }));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ds), 'Debts & Loans');
+        }
+
+        const accounts = await DB.getAll('capital_accounts') || [];
+        if (accounts.length) {
+            const as = accounts.map(a => ({
+                ID: a.id, Name: a.name, Type: a.type, 'Account Number': a.accountNumber || '',
+                'Opening Balance': a.openingBalance || 0, 'Current Balance': a.balance || 0
+            }));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(as), 'Bank Accounts');
+        }
+
+        const capEntries = Utils.filterBySeason(await DB.getAll('capital_entries') || [], activeSeason);
+        if (capEntries.length) {
+            const cs = capEntries.map(e => ({
+                ID: e.id, Date: e.date, Type: e.type, Amount: e.amount, Description: e.description || ''
+            }));
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cs), 'Owner Capital');
+        }
+
         XLSX.writeFile(wb, `AgriSys_Full_${Utils.todayISO()}.xlsx`);
         Utils.hideLoading();
         Utils.showToast('Full export complete!');

@@ -213,12 +213,14 @@ const SalePayments = {
                     createdAt: new Date().toISOString()
                 };
 
+                const ops = [];
+
                 currentS.amountReceived = (currentS.amountReceived || 0) + payAmt;
                 currentS.balance = (currentS.amount || 0) - currentS.amountReceived;
                 currentS.paymentStatus = currentS.amountReceived >= (currentS.amount || 0) ? 'paid' : 'partial';
 
-                await DB.put('sales', currentS);
-                await DB.put('sale_payments', payment);
+                ops.push({ storeName: 'sales', action: 'put', data: currentS });
+                ops.push({ storeName: 'sale_payments', action: 'put', data: payment });
 
                 if (netCash > 0) {
                     const capitalTx = {
@@ -232,8 +234,15 @@ const SalePayments = {
                         notes: `Buyer payment from ${currentS.buyerName} for ${currentS.id} (Receipt: ${receiptNo})`,
                         createdAt: new Date().toISOString()
                     };
-                    await DB.put('capital_transactions', capitalTx);
+                    ops.push({ storeName: 'capital_transactions', action: 'put', data: capitalTx });
                 }
+
+                if (typeof CoreServices !== 'undefined' && currentS.buyerName) {
+                    const op = await CoreServices.getPartyBalanceOp('buyer', currentS.buyerName, -netCash);
+                    if (op) ops.push(op);
+                }
+
+                await DB.commitUnitOfWork(ops);
 
                 await Utils.audit('create', 'sale_payment', payment.id, { newAmount: payAmt, buyer: currentS.buyerName });
 
@@ -357,6 +366,8 @@ const SalePayments = {
                 .filter(s => s.buyerName && s.buyerName.trim().toLowerCase() === bn && s.paymentStatus !== 'paid')
                 .sort((a, b) => new Date(a.date) - new Date(b.date));
 
+            const ops = [];
+
             for (const s of sales) {
                 if (remainingToDistribute <= 0) break;
                 const sBal = (s.amount || 0) - (s.amountReceived || 0);
@@ -364,7 +375,7 @@ const SalePayments = {
                 s.amountReceived = (s.amountReceived || 0) + alloc;
                 s.balance = (s.amount || 0) - s.amountReceived;
                 s.paymentStatus = s.amountReceived >= (s.amount || 0) ? 'paid' : 'partial';
-                await DB.put('sales', s);
+                ops.push({ storeName: 'sales', action: 'put', data: s });
                 remainingToDistribute -= alloc;
             }
 
@@ -385,7 +396,7 @@ const SalePayments = {
                 createdAt: new Date().toISOString()
             };
 
-            await DB.put('sale_payments', payment);
+            ops.push({ storeName: 'sale_payments', action: 'put', data: payment });
 
             if (netCash > 0) {
                 const capitalTx = {
@@ -399,8 +410,15 @@ const SalePayments = {
                     notes: `General buyer receipt from ${name} (Receipt: ${receiptNo})`,
                     createdAt: new Date().toISOString()
                 };
-                await DB.put('capital_transactions', capitalTx);
+                ops.push({ storeName: 'capital_transactions', action: 'put', data: capitalTx });
             }
+
+            if (typeof CoreServices !== 'undefined' && name) {
+                const op = await CoreServices.getPartyBalanceOp('buyer', name, -netCash);
+                if (op) ops.push(op);
+            }
+
+            await DB.commitUnitOfWork(ops);
 
             await Utils.audit('create', 'sale_payment', payment.id, { newAmount: payAmt, buyer: name });
 
@@ -469,8 +487,11 @@ const SalePayments = {
                 if (netCash > 0 && !document.getElementById('pay-account').value) { Utils.showToast('Select cash/bank account for this receipt', 'error'); return; }
 
                 const oldPayment = { ...payment };
+                const ops = [];
                 if (payment.capitalTxId) {
-                    await Utils.deleteLinkedCapitalTx('sale_payments', payment.id);
+                    const allCapTxs = await DB.getAll('capital_transactions') || [];
+                    const linkedCap = allCapTxs.filter(t => t.sourceStore === 'sale_payments' && t.sourceId === payment.id);
+                    for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
                 }
 
                 payment.amount = newAmount;
@@ -496,17 +517,27 @@ const SalePayments = {
                         notes: `Buyer payment from ${currentS.buyerName} for ${currentS.id}`,
                         createdAt: new Date().toISOString()
                     };
-                    await DB.put('capital_transactions', capitalTx);
+                    ops.push({ storeName: 'capital_transactions', action: 'put', data: capitalTx });
                     payment.capitalTxId = capitalTx.id;
                 } else {
                     payment.capitalTxId = null;
                 }
 
-                await DB.put('sale_payments', payment);
+                ops.push({ storeName: 'sale_payments', action: 'put', data: payment });
+                
                 currentS.amountReceived = currentRcvdWithoutThis + newAmount;
                 currentS.balance = currentTotal - currentS.amountReceived;
                 currentS.paymentStatus = currentS.amountReceived >= currentTotal ? 'paid' : 'partial';
-                await DB.put('sales', currentS);
+                ops.push({ storeName: 'sales', action: 'put', data: currentS });
+
+                if (typeof CoreServices !== 'undefined' && currentS.buyerName) {
+                    const oldNetCash = oldPayment.netCashAmount || oldPayment.amount || 0;
+                    const delta = oldNetCash - netCash;
+                    const op = await CoreServices.getPartyBalanceOp('buyer', currentS.buyerName, delta);
+                    if (op) ops.push(op);
+                }
+
+                await DB.commitUnitOfWork(ops);
 
                 await Utils.audit('update', 'sale_payment', payment.id, { oldPayment, newPayment: payment });
 
@@ -532,15 +563,27 @@ const SalePayments = {
         const s = await DB.get('sales', payment.saleId);
         if (!s) return;
         if (!await Utils.confirm(`Delete buyer receipt ${payment.receiptNo || payment.id} for PKR ${Utils.formatPKR(payment.amount || 0)}? Linked capital transaction will be reversed.`)) return;
+        const ops = [];
         if (payment.capitalTxId) {
-            await Utils.deleteLinkedCapitalTx('sale_payments', payment.id);
+            const allCapTxs = await DB.getAll('capital_transactions') || [];
+            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'sale_payments' && t.sourceId === payment.id);
+            for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
         }
-        await DB.delete('sale_payments', payment.id);
+        ops.push({ storeName: 'sale_payments', action: 'delete', key: payment.id, softDelete: true, data: payment });
+        
         const total = s.amount || 0;
         s.amountReceived = Math.max(0, (s.amountReceived || 0) - (payment.amount || 0));
         s.balance = total - s.amountReceived;
         s.paymentStatus = s.amountReceived >= total ? 'paid' : (s.amountReceived > 0 ? 'partial' : 'pending');
-        await DB.put('sales', s);
+        ops.push({ storeName: 'sales', action: 'put', data: s });
+        
+        if (typeof CoreServices !== 'undefined' && s.buyerName) {
+            const oldNetCash = payment.netCashAmount || payment.amount || 0;
+            const op = await CoreServices.getPartyBalanceOp('buyer', s.buyerName, oldNetCash);
+            if (op) ops.push(op);
+        }
+        
+        await DB.commitUnitOfWork(ops);
         await Utils.audit('delete', 'sale_payment', payment.id, { oldAmount: payment.amount || 0, oldRecord: payment });
         Utils.showToast('Receipt deleted!');
         await this.render();

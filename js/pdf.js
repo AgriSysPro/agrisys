@@ -31,6 +31,70 @@ const ReceiptPDF = {
         return y;
     },
 
+    // ── Universal Report Header ──
+    drawReportHeader(doc, biz, title, config = {}) {
+        const pw = doc.internal.pageSize.getWidth();
+        const mx = config.marginX || 15;
+        let y = config.startY || 15;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(16);
+        doc.text((biz.bizName || 'AgriSys').toUpperCase(), pw / 2, y, { align: 'center' });
+        y += 5;
+        
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        const subtitle = biz.address || 'Agricultural Business Management';
+        doc.text(subtitle, pw / 2, y, { align: 'center' });
+        y += 4;
+        doc.text('Phone: ' + (biz.phone || '-'), pw / 2, y, { align: 'center' });
+        y += 4;
+        if (config.showOwner !== false && biz.ownerName) {
+            doc.text('Proprietor: ' + biz.ownerName, pw / 2, y, { align: 'center' });
+            y += 4;
+        }
+
+        // Double rule
+        doc.setLineWidth(0.8);
+        doc.line(mx, y, pw - mx, y);
+        y += 1;
+        doc.setLineWidth(0.3);
+        doc.line(mx, y, pw - mx, y);
+        y += 6;
+
+        if (title) {
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(13);
+            doc.text(title.toUpperCase(), pw / 2, y, { align: 'center' });
+            y += 7;
+        }
+        
+        return y;
+    },
+
+    // ── Universal Report Footer ──
+    drawReportFooter(doc) {
+        const pw = doc.internal.pageSize.getWidth();
+        const ph = doc.internal.pageSize.getHeight();
+        const pages = doc.internal.getNumberOfPages();
+        const now = new Date();
+        const ts = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+
+        for (let i = 1; i <= pages; i++) {
+            doc.setPage(i);
+            doc.setFontSize(7);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(150);
+            
+            // Generate timestamp left
+            doc.text(`Generated: ${ts}`, 15, ph - 10);
+            
+            // Page numbering right
+            doc.text(`Page ${i} of ${pages}`, pw - 15, ph - 10, { align: 'right' });
+        }
+        doc.setTextColor(0);
+    },
+
     async getQRCode(text) {
         if (typeof QRCode === 'undefined') return null;
         try {

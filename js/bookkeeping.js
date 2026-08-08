@@ -93,6 +93,38 @@ const Bookkeeping = {
             }
         });
 
+        // ── Debts / Loans ──
+        const debts = Utils.filterBySeason(await DB.getAll('company_debts'), activeSeason);
+        debts.forEach(d => {
+            const desc = `Debt / Loan ${d.type === 'given' ? 'to' : 'repaid by'}: ${d.personName}${d.notes ? ' (' + d.notes + ')' : ''}`;
+            if (d.type === 'given') {
+                entries.push({ date: d.date, description: desc, account: 'Debts / Loans Receivable', debit: d.amount, credit: 0, type: 'debt' });
+                entries.push({ date: d.date, description: desc, account: 'Cash / Bank', debit: 0, credit: d.amount, type: 'debt' });
+            } else if (d.type === 'repaid') {
+                entries.push({ date: d.date, description: desc, account: 'Cash / Bank', debit: d.amount, credit: 0, type: 'debt' });
+                entries.push({ date: d.date, description: desc, account: 'Debts / Loans Receivable', debit: 0, credit: d.amount, type: 'debt' });
+            }
+        });
+
+        // ── Partner Transactions ──
+        const partners = await DB.getAll('partners') || [];
+        const partnerTxs = Utils.filterBySeason(await DB.getAll('partner_transactions'), activeSeason);
+        partnerTxs.forEach(t => {
+            const p = partners.find(x => x.id === t.partnerId);
+            const pName = p ? p.name : 'Partner';
+            const desc = t.description ? `${t.description} (${pName})` : `Partner ${t.type.replace('_', ' ')} (${pName})`;
+            if (t.type === 'contribution') {
+                entries.push({ date: t.date, description: desc, account: 'Cash / Bank', debit: t.amount, credit: 0, type: 'partner_capital' });
+                entries.push({ date: t.date, description: desc, account: 'Partner Capital (' + pName + ')', debit: 0, credit: t.amount, type: 'partner_capital' });
+            } else if (t.type === 'drawing') {
+                entries.push({ date: t.date, description: desc, account: 'Partner Drawings (' + pName + ')', debit: t.amount, credit: 0, type: 'partner_capital' });
+                entries.push({ date: t.date, description: desc, account: 'Cash / Bank', debit: 0, credit: t.amount, type: 'partner_capital' });
+            } else if (t.type === 'profit_payout') {
+                entries.push({ date: t.date, description: desc, account: 'Profit Distribution / Retained Earnings', debit: t.amount, credit: 0, type: 'partner_capital' });
+                entries.push({ date: t.date, description: desc, account: 'Cash / Bank', debit: 0, credit: t.amount, type: 'partner_capital' });
+            }
+        });
+
         // ── Purchase entries (Double-entry) ──
         purchases.forEach(p => {
             const inventoryCost = p.amount || Utils.purchaseCostAmount(p);
@@ -280,23 +312,7 @@ const Bookkeeping = {
             const biz = await Settings.getBusiness();
 
             // Header — Use shared approach
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(18);
-            doc.text((biz.bizName || 'AgriSys').toUpperCase(), 105, 15, { align: 'center' });
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'normal');
-            doc.text(biz.address || 'Agricultural Business Management', 105, 21, { align: 'center' });
-            if (biz.phone) doc.text('Phone: ' + biz.phone, 105, 25, { align: 'center' });
-
-            const hEnd = biz.phone ? 27 : 23;
-            doc.setLineWidth(0.8); doc.line(15, hEnd, 195, hEnd);
-            doc.setLineWidth(0.3); doc.line(15, hEnd + 1, 195, hEnd + 1);
-
-            doc.setFontSize(12);
-            doc.setFont('helvetica', 'bold');
-            doc.text('GENERAL JOURNAL', 105, hEnd + 8, { align: 'center' });
-
-            doc.setLineWidth(0.15); doc.line(15, hEnd + 11, 195, hEnd + 11);
+            let y = ReceiptPDF.drawReportHeader(doc, biz, 'GENERAL JOURNAL');
 
             let period = 'All Time';
             if (from && to) period = `${Utils.formatDate(from)} to ${Utils.formatDate(to)}`;
@@ -305,8 +321,9 @@ const Bookkeeping = {
 
             doc.setFontSize(9);
             doc.setFont('helvetica', 'normal');
-            doc.text(`Period: ${period}`, 105, hEnd + 17, { align: 'center' });
-            doc.setLineWidth(0.15); doc.line(15, hEnd + 20, 195, hEnd + 20);
+            doc.text(`Period: ${period}`, 105, y + 6, { align: 'center' });
+            
+            y += 12;
 
             // Stats row
             const totalDebit = entries.reduce((s, e) => s + (e.debit || 0), 0);
@@ -322,7 +339,7 @@ const Bookkeeping = {
             ]);
 
             doc.autoTable({
-                startY: hEnd + 25,
+                startY: y,
                 head: [['Date', 'Description', 'Account', 'Debit (PKR)', 'Credit (PKR)']],
                 body: tableBody,
                 foot: [['', 'TOTALS', entries.length + ' entries', 'PKR ' + Utils.formatPKR(totalDebit), 'PKR ' + Utils.formatPKR(totalCredit)]],
@@ -363,10 +380,7 @@ const Bookkeeping = {
             doc.text('Authorized Signature', 165, sy + 5, { align: 'center' });
 
             // Footer
-            doc.setFontSize(6);
-            doc.setTextColor(120);
-            doc.text('Auto-generated by AgriSys on ' + new Date().toLocaleString(), 105, sy + 12, { align: 'center' });
-            doc.setTextColor(0);
+            ReceiptPDF.drawReportFooter(doc);
 
             doc.save(`Journal_${Utils.todayISO()}.pdf`);
             Utils.hideLoading();
@@ -389,8 +403,11 @@ const Journal = {
         'Sales Revenue',
         'Operating Expenses',
         'Advances to Farmers',
+        'Debts / Loans Receivable',
         'Owner Capital',
         'Owner Drawings',
+        'Partner Capital',
+        'Partner Drawings / Profit Payouts',
         'Opening Equity',
         'Other Income'
     ],
