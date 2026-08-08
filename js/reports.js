@@ -302,7 +302,7 @@ const Reports = {
         const totalLiabilities = accountsPayable + buyerAdvances;
 
         // Equity (from Capital Entries)
-        const capitalEntries = scoped.capitalEntries || [];
+        const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
         const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
             capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
 
@@ -388,7 +388,7 @@ const Reports = {
         const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
         // Financing Activities (from Capital Entries)
-        const capitalEntries = scoped.capitalEntries || [];
+        const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
         const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
         const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
         const netFinancingCash = capitalDeposits - capitalWithdrawals;
@@ -901,7 +901,7 @@ const Reports = {
             const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
             const totalLiabilities = accountsPayable + buyerAdvances;
 
-            const capitalEntries = scoped.capitalEntries || [];
+            const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
             const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
                 capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
 
@@ -1027,7 +1027,7 @@ const Reports = {
             const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
             const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
-            const capitalEntries = scoped.capitalEntries || [];
+            const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
             const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
             const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
             const netFinancingCash = capitalDeposits - capitalWithdrawals;
@@ -1161,7 +1161,7 @@ const Reports = {
         const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
         const totalLiabilities = accountsPayable + buyerAdvances;
 
-        const capitalEntries = scoped.capitalEntries || [];
+        const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
         const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
             capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
 
@@ -1229,7 +1229,7 @@ const Reports = {
         const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
         const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
 
-        const capitalEntries = scoped.capitalEntries || [];
+        const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
         const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
         const capitalWithdrawals = capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
         const netFinancingCash = capitalDeposits - capitalWithdrawals;

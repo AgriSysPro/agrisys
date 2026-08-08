@@ -12,7 +12,7 @@ const BankAccounts = {
         const accounts = await DB.getAll('capital_accounts');
         const activeSeason = await Utils.getActiveSeason();
         const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
-        const totalInvested = accounts.reduce((s, a) => s + (a.openingBalance || 0), 0);
+        const totalOpening = accounts.reduce((s, a) => s + (a.openingBalance || 0), 0);
         let currentTotal = 0;
         let totalDeposits = 0;
         let totalWithdrawals = 0;
@@ -26,9 +26,9 @@ const BankAccounts = {
         });
 
         document.getElementById('capital-stats').innerHTML = `
-            <div class="stat-card blue"><div class="stat-label">Total Invested Capital</div><div class="stat-value">PKR ${Utils.formatPKR(totalInvested)}</div></div>
+            <div class="stat-card blue"><div class="stat-label">Total Opening Balance</div><div class="stat-value">PKR ${Utils.formatPKR(totalOpening)}</div></div>
             <div class="stat-card green"><div class="stat-label">Current Total Balance</div><div class="stat-value">PKR ${Utils.formatPKR(currentTotal)}</div></div>
-            <div class="stat-card ${currentTotal >= totalInvested ? 'green' : 'orange'}"><div class="stat-label">Accounts</div><div class="stat-value">${accounts.length}</div></div>
+            <div class="stat-card ${currentTotal >= totalOpening ? 'green' : 'orange'}"><div class="stat-label">Accounts</div><div class="stat-value">${accounts.length}</div></div>
         `;
     },
 
@@ -434,6 +434,13 @@ const BankAccounts = {
         await DB.delete('capital_accounts', id);
         const txs = await DB.getByIndex('capital_transactions', 'accountId', id);
         for (const t of txs) await DB.delete('capital_transactions', t.id);
+        // Unlink any capital entries referencing this account
+        const capEntries = (await DB.getAll('capital_entries')).filter(e => e.accountId === id);
+        for (const ce of capEntries) {
+            ce.accountId = null;
+            ce.linkedTxId = null;
+            await DB.put('capital_entries', ce);
+        }
         Utils.showToast('Account deleted!');
         this.render();
     },
@@ -447,6 +454,9 @@ const BankAccounts = {
             const allTx = await DB.getAll('capital_transactions');
             const linked = allTx.filter(t => t.transferId === tx.transferId && t.id !== id);
             for (const lt of linked) await DB.delete('capital_transactions', lt.id);
+        }
+        if (tx && tx.sourceStore === 'capital_entries' && tx.sourceId) {
+            try { await DB.delete('capital_entries', tx.sourceId); } catch (e) {}
         }
         await DB.delete('capital_transactions', id);
         Utils.showToast('Deleted!');
@@ -726,7 +736,7 @@ const BankAccounts = {
             return;
         }
 
-        XLSX.writeFile(wb, `Capital_History_${Utils.todayISO()}.xlsx`);
+        XLSX.writeFile(wb, `Bank_Accounts_${Utils.todayISO()}.xlsx`);
         Utils.showToast('Excel exported!');
     }
 };

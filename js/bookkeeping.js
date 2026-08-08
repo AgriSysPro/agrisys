@@ -55,8 +55,8 @@ const Bookkeeping = {
         accounts.forEach(a => {
             const opening = a.openingBalance || 0;
             if (opening > 0) {
-                entries.push({ date: a.createdAt ? Utils.dateToISO(new Date(a.createdAt)) : Utils.todayISO(), description: `Opening capital: ${a.name}`, account: 'Cash / Bank', debit: opening, credit: 0, type: 'opening' });
-                entries.push({ date: a.createdAt ? Utils.dateToISO(new Date(a.createdAt)) : Utils.todayISO(), description: `Opening capital: ${a.name}`, account: 'Owner Capital', debit: 0, credit: opening, type: 'opening' });
+                entries.push({ date: a.createdAt ? Utils.dateToISO(new Date(a.createdAt)) : Utils.todayISO(), description: `Opening balance: ${a.name}`, account: 'Cash / Bank', debit: opening, credit: 0, type: 'opening' });
+                entries.push({ date: a.createdAt ? Utils.dateToISO(new Date(a.createdAt)) : Utils.todayISO(), description: `Opening balance: ${a.name}`, account: 'Opening Equity', debit: 0, credit: opening, type: 'opening' });
             }
         });
 
@@ -77,8 +77,7 @@ const Bookkeeping = {
                 entries.push({ date: o.date, description: `Opening stock: ${o.crop}`, account: 'Inventory / Purchases', debit: o.amount, credit: 0, type: 'opening' });
                 entries.push({ date: o.date, description: `Opening stock: ${o.crop}`, account: 'Opening Equity', debit: 0, credit: o.amount, type: 'opening' });
             } else if (o.type === 'capital') {
-                entries.push({ date: o.date, description: 'Opening cash / bank balance', account: 'Cash / Bank', debit: o.amount, credit: 0, type: 'opening' });
-                entries.push({ date: o.date, description: 'Opening cash / bank balance', account: 'Owner Capital', debit: 0, credit: o.amount, type: 'opening' });
+                // Handled via capital_entries which generates its own journal entries below
             }
         });
 
@@ -390,8 +389,9 @@ const Journal = {
         'Sales Revenue',
         'Operating Expenses',
         'Advances to Farmers',
-        'Capital Account',
-        'Drawings / Dividends',
+        'Owner Capital',
+        'Owner Drawings',
+        'Opening Equity',
         'Other Income'
     ],
 
@@ -409,10 +409,10 @@ const Journal = {
                 sel.insertAdjacentHTML('beforeend', `<option value="${acc}">${acc}</option>`);
             });
 
-            // Add capital accounts
+            // Add bank/cash accounts
             const capAccounts = await DB.getAll('capital_accounts') || [];
             capAccounts.forEach(c => {
-                const name = `Capital: ${c.name}`;
+                const name = `Bank/Cash: ${c.name}`;
                 if(!this.accounts.includes(name)) {
                     sel.insertAdjacentHTML('beforeend', `<option value="${name}">${name}</option>`);
                 }

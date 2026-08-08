@@ -198,7 +198,7 @@ const Settings = {
     async clearAll() {
         const ok = await Utils.confirm('This will DELETE ALL DATA permanently. Are you sure?');
         if (!ok) return;
-        const stores = ['settings','purchases','farmers','purchase_payments','sales','sale_payments','expenses','capital_accounts','capital_transactions','buyers','farmer_advances','deductions','journal_entries','seasons','audit_logs','opening_balances','stock_adjustments','opening_balance_payments','commissions','retained_earnings'];
+        const stores = ['settings','purchases','farmers','purchase_payments','sales','sale_payments','expenses','capital_accounts','capital_transactions','capital_entries','buyers','farmer_advances','deductions','journal_entries','seasons','audit_logs','opening_balances','stock_adjustments','opening_balance_payments','commissions','retained_earnings'];
         for (const s of stores) await DB.clear(s);
         Utils.showToast('All data cleared! Reloading...');
         setTimeout(() => location.reload(), 1500);

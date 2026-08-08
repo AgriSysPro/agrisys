@@ -70,6 +70,7 @@ const CapitalMgmt = {
         const sel = document.getElementById('cap-entry-account');
         sel.innerHTML = '<option value="">— None (no bank link) —</option>' +
             accounts.map(a => `<option value="${Utils.escapeHTML(a.id)}">${Utils.escapeHTML(a.name)} (${a.type})</option>`).join('');
+        if (accounts.length > 0) sel.value = accounts[0].id;
 
         Utils.showModal('capital-entry-modal');
     },
@@ -130,6 +131,10 @@ const CapitalMgmt = {
     async deleteEntry(id) {
         if (!await Utils.confirm('Delete this capital entry?')) return;
         const entry = await DB.get('capital_entries', id);
+        if (entry && entry.sourceStore === 'opening_balances' && entry.sourceId) {
+            await DB.delete('opening_balances', entry.sourceId);
+            await Utils.deleteLinkedCapitalTx('opening_balances', entry.sourceId);
+        }
         if (entry && entry.linkedTxId) {
             // Also delete the linked bank transaction
             try { await DB.delete('capital_transactions', entry.linkedTxId); } catch (e) { /* may already be deleted */ }

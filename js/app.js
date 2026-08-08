@@ -267,6 +267,25 @@ const App = {
         const pendingFarmers = purchases.filter(p => p.paymentStatus !== 'paid').length;
         const pendingBuyers = sales.filter(s => s.paymentStatus !== 'paid').length;
 
+        // Bank Accounts & Capital summary
+        const allAccounts = await DB.getAll('capital_accounts') || [];
+        const allBankTxs = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
+        let cashBankTotal = 0;
+        allAccounts.forEach(a => {
+            const txs = allBankTxs.filter(t => t.accountId === a.id);
+            const dep = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
+            const wdr = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
+            cashBankTotal += (a.openingBalance || 0) + dep - wdr;
+        });
+
+        let netCapital = 0;
+        let totalContributions = 0;
+        if (typeof CapitalMgmt !== 'undefined' && typeof CapitalMgmt.getCapitalSummary === 'function') {
+            const capSummary = await CapitalMgmt.getCapitalSummary();
+            netCapital = capSummary.netCapital || 0;
+            totalContributions = capSummary.totalContributions || 0;
+        }
+
         document.getElementById('dashboard-stats').innerHTML = `
             <div class="stat-card blue">
                 <div class="stat-label">Total Purchases</div>
@@ -298,6 +317,16 @@ const App = {
                 <div class="stat-label">Overdue Farmers</div>
                 <div class="stat-value">${overduePurchases.length}</div>
                 <div class="stat-sub">PKR ${Utils.formatPKR(overduePurchases.reduce((s, x) => s + ((x.netPayableAmount || x.amount || 0) - (x.amountPaid || 0)), 0))}</div>
+            </div>
+            <div class="stat-card green" style="cursor:pointer" onclick="App.navigate('bank-accounts')">
+                <div class="stat-label">Cash & Bank Balances</div>
+                <div class="stat-value">PKR ${Utils.formatPKR(cashBankTotal)}</div>
+                <div class="stat-sub">${allAccounts.length} account${allAccounts.length === 1 ? '' : 's'} · Click to view</div>
+            </div>
+            <div class="stat-card purple" style="cursor:pointer" onclick="App.navigate('capital-mgmt')">
+                <div class="stat-label">Net Owner Capital</div>
+                <div class="stat-value">PKR ${Utils.formatPKR(netCapital)}</div>
+                <div class="stat-sub">Total Invested: PKR ${Utils.formatPKR(totalContributions)} · Click to view</div>
             </div>
         `;
 

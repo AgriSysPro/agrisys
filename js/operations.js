@@ -120,11 +120,24 @@ const OpeningBalances = {
                 type: 'deposit',
                 amount,
                 date: data.date,
-                description: 'Opening balance',
+                description: 'Opening capital balance',
                 sourceStore: 'opening_balances',
                 sourceId: data.id
             });
             if (tx) { data.capitalTxId = tx.id; await DB.put('opening_balances', data); }
+            // Also create a capital_entry so it syncs to Capital section & reports
+            await DB.put('capital_entries', {
+                id: Utils.generateId(),
+                type: 'contribution',
+                amount,
+                date: data.date,
+                description: 'Opening capital balance',
+                accountId: data.accountId,
+                linkedTxId: tx ? tx.id : null,
+                sourceStore: 'opening_balances',
+                sourceId: data.id,
+                createdAt: new Date().toISOString()
+            });
         }
         if (type === 'stock') {
             const adj = {
@@ -249,6 +262,12 @@ const OpeningBalances = {
             await DB.delete('opening_balance_payments', payment.id);
         }
         if (b.type === 'stock') await DB.delete('stock_adjustments', id);
+        // Clean up linked capital_entries for capital-type opening balances
+        if (b.type === 'capital') {
+            const allCapEntries = await DB.getAll('capital_entries');
+            const linked = allCapEntries.filter(e => e.sourceStore === 'opening_balances' && e.sourceId === id);
+            for (const ce of linked) await DB.delete('capital_entries', ce.id);
+        }
         await DB.delete('opening_balances', id);
         await Utils.audit('delete', 'opening_balance', id, { oldAmount: b.amount || 0, oldRecord: b, linkedPayments: linkedPayments.length });
         Utils.showToast('Opening balance deleted!');
