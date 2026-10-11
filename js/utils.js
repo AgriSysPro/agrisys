@@ -67,6 +67,25 @@ const Utils = {
     },
 
     async getNextReceiptId(type) {
+        const receiptStore = { purchase: 'purchases', sale: 'sales' }[type];
+        if (receiptStore) {
+            // Preview only: opening or clearing a form must not consume a number.
+            // Include deleted receipts so an issued number is never reused.
+            let last = 100000;
+            await DB.transact([receiptStore], 'readonly', stores => {
+                const request = stores[receiptStore].openCursor();
+                request.onsuccess = () => {
+                    const cursor = request.result;
+                    if (!cursor) return;
+                    const id = String(cursor.value.id);
+                    if (/^\d+$/.test(id) && Number.isSafeInteger(Number(id))) {
+                        last = Math.max(last, Number(id));
+                    }
+                    cursor.continue();
+                };
+            });
+            return String(last + 1);
+        }
         const key = `seq_${type}`;
         return new Promise((resolve, reject) => {
             DB.transact(['settings'], 'readwrite', (stores) => {
@@ -85,8 +104,15 @@ const Utils = {
     },
 
     async confirmReceiptId(type, idUsed) {
-        // No longer needed as getNextReceiptId now reserves atomically. Kept for backward compatibility.
+        // Purchase/sale numbers come from saved receipts; other sequences reserve immediately.
         return Promise.resolve();
+    },
+
+    async withReceiptSaveLock(type, save) {
+        if (typeof navigator !== 'undefined' && navigator.locks) {
+            return navigator.locks.request(`agrisys-receipt-${type}`, save);
+        }
+        return save();
     },
 
     // Generate a random 6-digit number
@@ -464,21 +490,70 @@ const Utils = {
     purchaseCostAmount(purchase) {
         const base = purchase.payableBeforeAdvance;
         if (base !== undefined && base !== null) return base || 0;
-        return (purchase.netPayableAmount || purchase.amount || 0) + (purchase.advanceDeducted || 0);
+        return ((purchase.netPayableAmount ?? purchase.amount ?? 0)) + (purchase.advanceDeducted || 0);
     },
 
     purchasePayableAmount(purchase) {
-        return purchase.netPayableAmount || purchase.amount || 0;
+        return (purchase.netPayableAmount ?? purchase.amount ?? 0);
+    },
+
+    async getInvoicePayments(store, linkField, invoiceId) {
+        return (await DB.getAll(store)).filter(p => this.paymentAllocatedTo(p, invoiceId, linkField) > 0)
+            .map(p => ({ ...p, amount: this.paymentAllocatedTo(p, invoiceId, linkField) }));
+    },
+
+    paymentAllocatedTo(payment, invoiceId, linkField) {
+        if (Array.isArray(payment.allocations)) return payment.allocations.filter(a => a.invoiceId === invoiceId).reduce((s, a) => s + (a.amount || 0), 0);
+        return payment[linkField] === invoiceId ? (payment.amount || 0) : 0;
+    },
+
+    initialPaymentFor(record, allPayments, linkField, paidField) {
+        if (['opening_balance', 'opening_stock', 'stock_adjustment'].includes(record.type)) return 0;
+        const field = paidField === 'amountPaid' ? 'initialPaymentAmount' : 'initialReceiptAmount';
+        if (record[field] !== undefined && record[field] !== null) return record[field];
+        return Math.max(0, (record[paidField] || 0) - allPayments.reduce((s, p) => s + this.paymentAllocatedTo(p, record.id, linkField), 0));
     },
 
     paymentTotalFor(record, allPayments, linkField, paidField, asOfDate = null) {
-        const linked = allPayments.filter(p => p[linkField] === record.id);
-        const laterTotal = linked.reduce((sum, p) => sum + (p.amount || 0), 0);
-        const initialPaid = Math.max(0, (record[paidField] || 0) - laterTotal);
-        const inScopeLater = linked
-            .filter(p => !asOfDate || !p.date || p.date <= asOfDate)
-            .reduce((sum, p) => sum + (p.amount || 0), 0);
-        return initialPaid + inScopeLater;
+        // Synthetic stock is settled without a cash or party obligation.
+        if (['opening_balance', 'opening_stock', 'stock_adjustment'].includes(record.type)) return record[paidField] || 0;
+        if (asOfDate && record.date > asOfDate) return 0;
+        const later = allPayments.filter(p => !asOfDate || p.date <= asOfDate).reduce((s, p) => s + this.paymentAllocatedTo(p, record.id, linkField), 0);
+        return this.initialPaymentFor(record, allPayments, linkField, paidField) + later;
+    },
+
+    paymentCashAmount(payment) {
+        return payment.netCashAmount ?? Math.max(0, (payment.totalPaidCash ?? payment.amount ?? 0) - (payment.advanceDeducted || 0));
+    },
+
+    isLinkedCapitalTx(tx, store, id, capitalTxId = null) {
+        return (capitalTxId && tx.id === capitalTxId) || (tx.sourceStore === store && tx.sourceId === id)
+            || (tx.referenceId === id && ((store === 'purchase_payments' && tx.category === 'farmer_payment') || (store === 'sale_payments' && tx.category === 'sale_payment')));
+    },
+
+    async renamePartyOps(type, id, name) {
+        const master = type === 'farmer' ? 'farmers' : 'buyers';
+        const original = await DB.get(master, id);
+        const normalized = name.trim().toLowerCase();
+        const others = await DB.getAll(master);
+        if (others.some(p => p.id !== id && p.name.trim().toLowerCase() === normalized)) throw new Error('A party with this name already exists');
+        if (!original || original.name === name) return [];
+        const oldName = original.name.trim().toLowerCase();
+        const fields = type === 'farmer' ? { purchases: 'farmerName', purchase_payments: 'farmerName', farmer_advances: 'farmerName', commissions: 'farmerName' } : { sales: 'buyerName', sale_payments: 'buyerName', commissions: 'buyerName' };
+        const ops = [];
+        for (const [store, field] of Object.entries(fields)) {
+            for (const record of await DB.getAll(store)) if ((record[field] || '').trim().toLowerCase() === oldName) {
+                record[field] = name; ops.push({ storeName: store, action: 'put', data: record });
+            }
+        }
+        for (const store of ['opening_balances', 'opening_balance_payments']) {
+            for (const record of await DB.getAll(store)) if (record.type?.startsWith(type + '_') && (record.partyName || '').trim().toLowerCase() === oldName) {
+                record.partyName = name;
+                if (record[type + 'Name']) record[type + 'Name'] = name;
+                ops.push({ storeName: store, action: 'put', data: record });
+            }
+        }
+        return ops;
     },
 
     sortLedgerTransactions(transactions) {
@@ -488,6 +563,78 @@ const Utils = {
             if (ad - bd !== 0) return ad - bd;
             return String(a.sortKey || '').localeCompare(String(b.sortKey || ''));
         });
+    },
+
+    async journalCashTransactions() {
+        const accounts = await DB.getAll('capital_accounts');
+        const journals = (await DB.getAll('journal_entries')).filter(j => !j.cashPosted);
+        const result = [];
+        for (const j of journals) for (const [side, type] of [['debit', 'deposit'], ['credit', 'withdrawal']]) {
+            const label = j[side + 'Account'] || '';
+            if (label !== 'Cash / Bank' && !label.startsWith('Bank/Cash: ')) continue;
+            const accountId = j[side + 'AccountId'] || accounts.find(a => label === `Bank/Cash: ${a.name}`)?.id || '__unallocated_journal_cash__';
+            result.push({ id: `${j.id}-${side}`, accountId, type, amount: j.amount, date: j.date, description: `Legacy journal: ${j.description || j.id}`, sourceStore: 'journal_entries', sourceId: j.id, virtual: true });
+        }
+        return result;
+    },
+
+    async validateAdvanceHistory(operations) {
+        const names = ['opening_balances', 'farmer_advances', 'purchases', 'purchase_payments', 'sale_payments'];
+        const before = Object.fromEntries(await Promise.all(names.map(async n => [n, await DB.getAll(n)])));
+        const after = this.projectOperations(before, operations);
+        const events = data => {
+            const result = {};
+            const add = (type, name, date, amount) => {
+                const key = type + ':' + (name || '').trim().toLowerCase();
+                const days = result[key] ||= {};
+                days[date] = (days[date] || 0) + amount;
+            };
+            data.opening_balances.forEach(o => {
+                if (o.type === 'farmer_advance' || o.type === 'buyer_advance') add(o.type, o.partyName, o.date, o.amount || 0);
+            });
+            data.farmer_advances.filter(a => a.amount > 0).forEach(a => add('farmer_advance', a.farmerName, a.date, a.amount));
+            data.purchases.forEach(p => add('farmer_advance', p.farmerName, p.date, -(p.advanceDeducted || 0)));
+            data.purchase_payments.forEach(p => add('farmer_advance', p.farmerName, p.date, -(p.advanceDeducted || 0)));
+            data.sale_payments.forEach(p => add('buyer_advance', p.buyerName, p.date, -(p.advanceDeducted || 0)));
+            return result;
+        };
+        this.assertHistoryNotWorsened(events(before), events(after), 'Advance/deposit would be overdrawn');
+    },
+
+    projectOperations(data, operations) {
+        const result = Object.fromEntries(Object.entries(data).map(([name, rows]) => [name, rows.slice()]));
+        for (const op of operations) {
+            if (!result[op.storeName]) continue;
+            result[op.storeName] = result[op.storeName].filter(r => r.id !== (op.key ?? op.data?.id));
+            if (op.action !== 'delete' && !op.data.isDeleted) result[op.storeName].push(op.data);
+        }
+        return result;
+    },
+
+    assertHistoryNotWorsened(before, after, message) {
+        for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+            let oldBalance = 0, newBalance = 0;
+            const dates = [...new Set([...Object.keys(before[key] || {}), ...Object.keys(after[key] || {})])].sort();
+            for (const date of dates) {
+                oldBalance += before[key]?.[date] || 0;
+                newBalance += after[key]?.[date] || 0;
+                if (newBalance < Math.min(0, oldBalance) - 0.001) throw new Error(`${message}: ${key} on ${date}`);
+            }
+        }
+    },
+
+    async validateStockHistory(operations) {
+        const before = Object.fromEntries(await Promise.all(['purchases', 'sales', 'stock_adjustments'].map(async n => [n, await DB.getAll(n)])));
+        const events = data => {
+            const adjusted = this.applyStockAdjustments(data.purchases.filter(p => p.type !== 'opening_balance'), data.sales, data.stock_adjustments);
+            const result = {};
+            for (const [rows, sign] of [[adjusted.purchases, 1], [adjusted.sales, -1]]) for (const r of rows) {
+                const crop = (r.crop || '').trim().toLowerCase(), days = result[crop] ||= {};
+                days[r.date] = (days[r.date] || 0) + sign * (r.netWeight || 0);
+            }
+            return result;
+        };
+        this.assertHistoryNotWorsened(events(before), events(this.projectOperations(before, operations)), 'Change would leave insufficient stock');
     },
 
     async getFarmerAvailableAdvance(farmerName, options = {}) {
@@ -560,7 +707,7 @@ const Utils = {
         });
 
         purchases.forEach(p => {
-            const totalBill = p.netPayableAmount || p.amount || 0;
+            const totalBill = (p.netPayableAmount ?? p.amount ?? 0);
             transactions.push({
                 rawDate: p.date || p.createdAt,
                 createdAt: p.createdAt,
@@ -574,7 +721,7 @@ const Utils = {
             });
 
             const laterPayments = payments.filter(pay => pay.purchaseId === p.id).reduce((s, pay) => s + (pay.amount || 0), 0);
-            const initialPaid = Math.max(0, (p.amountPaid || 0) - laterPayments);
+            const initialPaid = this.initialPaymentFor(p, payments, 'purchaseId', 'amountPaid');
             if (initialPaid > 0) {
                 transactions.push({
                     rawDate: p.date || p.createdAt,
@@ -715,7 +862,7 @@ const Utils = {
                 credit: 0
             });
             const laterPayments = payments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-            const initialReceived = Math.max(0, (s.amountReceived || 0) - laterPayments);
+            const initialReceived = this.initialPaymentFor(s, payments, 'saleId', 'amountReceived');
             if (initialReceived > 0) {
                 transactions.push({
                     rawDate: s.date || s.createdAt,
@@ -741,7 +888,7 @@ const Utils = {
                 type: 'Receipt',
                 description: `Receipt for #${pay.saleId} (${(pay.mode || 'Cash').toUpperCase()})${pay.reference ? ' Ref: ' + pay.reference : ''}`,
                 debit: 0,
-                credit: pay.amount || 0
+                credit: Math.max(0, (pay.amount || 0) - (pay.advanceDeducted || 0))
             });
         });
 
@@ -816,13 +963,16 @@ const Utils = {
         const lotsByCropKey = {};
         purchases
             .slice()
-            .sort((a, b) => new Date(a.date || a.createdAt || 0) - new Date(b.date || b.createdAt || 0))
+            .sort((a, b) => new Date(a.fifoDate || a.date || a.createdAt || 0) - new Date(b.fifoDate || b.date || b.createdAt || 0))
             .forEach(p => {
                 if (!p.crop || (p.netWeight || 0) <= 0) return;
                 const key = getCropKey(p.crop);
                 const cost = (p.amount || this.purchaseCostAmount(p)) + (expenseByPurchase[p.id] || 0);
                 if (!lotsByCropKey[key]) lotsByCropKey[key] = [];
                 lotsByCropKey[key].push({
+                    sourceId: p.id,
+                    fifoDate: p.fifoDate || p.date,
+                    date: p.date || String(p.createdAt || '').slice(0, 10),
                     remainingWeight: p.netWeight || 0,
                     costPerKg: cost / (p.netWeight || 1)
                 });
@@ -843,6 +993,7 @@ const Utils = {
                 result[cropName].revenue += s.amount || 0;
                 const lots = lotsByCropKey[key] || [];
                 for (const lot of lots) {
+                    if (lot.date > (s.date || String(s.createdAt || '').slice(0, 10))) continue;
                     if (remainingToSell <= 0) break;
                     const used = Math.min(lot.remainingWeight, remainingToSell);
                     const usedCost = used * lot.costPerKg;
@@ -853,13 +1004,7 @@ const Utils = {
                 }
                 if (remainingToSell > 0) {
                     result[cropName].oversoldWeight += remainingToSell;
-                    const cropLots = lotsByCropKey[key] || [];
-                    const avgCostPerKg = cropLots.length > 0
-                        ? cropLots.reduce((sum, l) => sum + l.costPerKg, 0) / cropLots.length
-                        : (s.netWeight > 0 ? (s.amount / s.netWeight) * 0.85 : 0);
-                    const estimatedCost = remainingToSell * avgCostPerKg;
-                    result[cropName].cogs += estimatedCost;
-                    saleCogs += estimatedCost;
+
                 }
                 result[cropName].saleCogs[s.id] = saleCogs;
             });
@@ -869,6 +1014,7 @@ const Utils = {
             if (!result[cropName]) result[cropName] = { soldWeight: 0, cogs: 0, revenue: 0, oversoldWeight: 0, saleCogs: {} };
             result[cropName].inventoryWeight = lots.reduce((sum, lot) => sum + lot.remainingWeight, 0);
             result[cropName].inventoryValue = lots.reduce((sum, lot) => sum + (lot.remainingWeight * lot.costPerKg), 0);
+            result[cropName].remainingLots = lots.filter(lot => lot.remainingWeight > 0).map(lot => ({ ...lot }));
         });
 
         return result;

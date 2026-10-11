@@ -72,34 +72,21 @@ const SeasonManager = {
     },
 
     async carryForwardInventory(toSeason) {
-        const allPurchases = await DB.getAll('purchases');
-        const allSales = await DB.getAll('sales');
-
-        // CRITICAL: Exclude previous Opening Balance entries to avoid double-counting.
-        // OB entries are virtual copies of inventory already represented by real purchases.
-        // True remaining = (real purchases) - (all sales), ignoring OB duplicates.
-        const fp = allPurchases.filter(p => p.date && p.date < toSeason.startDate && p.type !== 'opening_balance');
-        const fs = allSales.filter(s => s.date && s.date < toSeason.startDate);
-
-        // Calculate per-crop remaining inventory
-        const cropData = {};
-        fp.forEach(p => {
-            if (!p.crop) return;
-            if (!cropData[p.crop]) cropData[p.crop] = { weight: 0, amount: 0, purchaseWeight: 0 };
-            cropData[p.crop].weight += (p.netWeight || 0);
-            cropData[p.crop].amount += Utils.purchaseCostAmount(p);
-            cropData[p.crop].purchaseWeight += (p.netWeight || 0);
-        });
-
-        fs.forEach(s => {
-            if (!s.crop) return;
-            if (!cropData[s.crop]) cropData[s.crop] = { weight: 0, amount: 0, purchaseWeight: 0 };
-            cropData[s.crop].weight -= (s.netWeight || 0);
-        });
+        const snapshot = await DB.financialSnapshot();
+        const ops = (await DB.getAll('purchases')).filter(p => p.type === 'opening_balance' && p.date === toSeason.startDate)
+            .map(p => ({ storeName: 'purchases', action: 'delete', key: p.id }));
+        const purchases = (await DB.getAll('purchases')).filter(p => p.date < toSeason.startDate && p.type !== 'opening_balance');
+        const sales = (await DB.getAll('sales')).filter(s => s.date < toSeason.startDate);
+        const adjustments = (await DB.getAll('stock_adjustments')).filter(a => a.date < toSeason.startDate);
+        const expenses = (await DB.getAll('expenses')).filter(e => e.date < toSeason.startDate);
+        const adjusted = Utils.applyStockAdjustments(purchases, sales, adjustments);
+        const inventory = Utils.calculateInventoryLots(adjusted.purchases, adjusted.sales, expenses);
+        const cropData = Object.entries(inventory).flatMap(([crop, data]) => (data.remainingLots || []).map(lot => ({ crop, sourceId: lot.sourceId, fifoDate: lot.fifoDate, weight: lot.remainingWeight, amount: lot.remainingWeight * lot.costPerKg, purchaseWeight: lot.remainingWeight })));
 
         // Create opening balance entries for crops with remaining inventory
         let carryCount = 0;
-        for (const [crop, data] of Object.entries(cropData)) {
+        for (const data of cropData) {
+            const crop = data.crop;
             if (data.weight <= 0) continue;
 
             const maund = data.weight / 40;
@@ -109,7 +96,9 @@ const SeasonManager = {
             const carryAmount = avgCostPerMn * maund;
 
             const obEntry = {
-                id: `OB-${toSeason.label}-${crop}`,
+                id: `OB-${toSeason.id || toSeason.label}-${data.sourceId}`,
+                sourceLotId: data.sourceId,
+                fifoDate: data.fifoDate,
                 type: 'opening_balance',
                 farmerName: 'Opening Balance',
                 date: toSeason.startDate,
@@ -130,6 +119,7 @@ const SeasonManager = {
                 amount: carryAmount,
                 netPayableAmount: carryAmount,
                 paymentStatus: 'paid',
+                initialPaymentAmount: 0,
                 amountPaid: carryAmount,
                 balance: 0,
                 notes: `Inventory carried forward into season ${toSeason.label}. Remaining weight: ${Utils.formatNum(data.weight, 2)} KG (${Utils.formatNum(maund, 2)} Mn)`,
@@ -137,10 +127,11 @@ const SeasonManager = {
                 createdAt: new Date().toISOString()
             };
 
-            await DB.put('purchases', obEntry);
+            ops.push({ storeName: 'purchases', action: 'put', data: obEntry });
             carryCount++;
         }
 
+        await DB.commitUnitOfWork(ops, snapshot);
         if (carryCount > 0) {
             Utils.showToast(`${carryCount} crop(s) inventory carried forward to ${toSeason.label}`);
         } else {

@@ -251,6 +251,7 @@ const App = {
 
     async loadDashboard() {
         let rawPurchases = await DB.getAll('purchases');
+        if (!await Utils.getActiveSeason()) rawPurchases = rawPurchases.filter(p => p.type !== 'opening_balance');
         let rawSales = await DB.getAll('sales');
         let rawExpenses = await DB.getAll('expenses');
         let rawStockAdjustments = await DB.getAll('stock_adjustments');
@@ -272,7 +273,7 @@ const App = {
         const stockPurchases = adjustedStock.purchases;
         const stockSales = adjustedStock.sales;
 
-        const totalPurchaseAmt = Utils.sumBy(purchases, p => p.netPayableAmount || p.amount || 0);
+        const totalPurchaseAmt = Utils.sumBy(purchases, p => (p.netPayableAmount ?? p.amount ?? 0));
         const totalPaid = Utils.sumBy(purchases, 'amountPaid');
         const totalSaleAmt = Utils.sumBy(sales, 'amount');
         const totalReceived = Utils.sumBy(sales, 'amountReceived');
@@ -352,7 +353,7 @@ const App = {
             <div class="stat-card blue">
                 <div class="stat-label">Overdue Farmers</div>
                 <div class="stat-value">${overduePurchases.length}</div>
-                <div class="stat-sub">PKR ${Utils.formatPKR(Utils.sumBy(overduePurchases, x => (x.netPayableAmount || x.amount || 0) - (x.amountPaid || 0)))}</div>
+                <div class="stat-sub">PKR ${Utils.formatPKR(Utils.sumBy(overduePurchases, x => ((x.netPayableAmount ?? x.amount ?? 0)) - (x.amountPaid || 0)))}</div>
             </div>
             <div class="stat-card green" style="cursor:pointer" onclick="App.navigate('bank-accounts')">
                 <div class="stat-label">Cash & Bank Balances</div>

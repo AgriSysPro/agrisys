@@ -45,103 +45,40 @@ const CoreServices = {
 
     // ---- Migration Script ----
     async runMaterializedViewMigrations() {
-        console.log('Running materialized view migrations...');
-        const stockCount = (await DB.getAll('warehouse_stock')).length;
-        if (stockCount === 0) {
-            console.log('Backfilling warehouse_stock...');
-            // Need to backfill
-            const purchases = await DB.getAll('purchases');
-            const sales = await DB.getAll('sales');
-            const adjustments = await DB.getAll('stock_adjustments');
-            
-            const stockMap = {};
-            for (const p of purchases) {
-                if (!p.crop) continue;
-                const c = p.crop.trim().toLowerCase();
-                stockMap[c] = (stockMap[c] || 0) + (p.netWeight || 0);
-            }
-            for (const a of adjustments) {
-                if (!a.crop) continue;
-                const c = a.crop.trim().toLowerCase();
-                const amt = a.direction === 'in' ? (a.quantity || 0) : -(a.quantity || 0);
-                stockMap[c] = (stockMap[c] || 0) + amt;
-            }
-            for (const s of sales) {
-                if (!s.crop) continue;
-                const c = s.crop.trim().toLowerCase();
-                stockMap[c] = (stockMap[c] || 0) - (s.netWeight || 0);
-            }
-            const openingBalances = await DB.getAll('opening_balances');
-            for (const ob of openingBalances) {
-                if (ob.type === 'stock' && ob.crop) {
-                    const c = ob.crop.trim().toLowerCase();
-                    stockMap[c] = (stockMap[c] || 0) + (ob.weight || 0);
-                }
-            }
-            
-            for (const [crop, weight] of Object.entries(stockMap)) {
-                await DB.put('warehouse_stock', { crop, netWeight: weight });
-            }
-            console.log('warehouse_stock backfilled.');
+        // Rebuild from source records, including after restore and schema changes.
+        const purchases = (await DB.getAll('purchases')).filter(p => p.type !== 'opening_balance');
+        const sales = await DB.getAll('sales');
+        const adjustments = await DB.getAll('stock_adjustments');
+        const adjusted = Utils.applyStockAdjustments(purchases, sales, adjustments);
+        const stock = {}, parties = {};
+        const addStock = (crop, weight) => { if (crop) { const key = crop.trim().toLowerCase(); stock[key] = (stock[key] || 0) + weight; } };
+        adjusted.purchases.forEach(p => addStock(p.crop, p.netWeight || 0));
+        adjusted.sales.forEach(s => addStock(s.crop, -(s.netWeight || 0)));
+        const addParty = (type, name, delta) => {
+            if (!name) return;
+            const normalized = name.trim().toLowerCase(), id = type + '_' + normalized;
+            parties[id] ||= { id, type, partyName: normalized, balance: 0 };
+            parties[id].balance += delta;
+        };
+        purchases.forEach(p => addParty('farmer', p.farmerName, Utils.purchasePayableAmount(p) - (p.amountPaid || 0) + (p.advanceDeducted || 0)));
+        sales.forEach(s => addParty('buyer', s.buyerName, (s.amount || 0) - (s.amountReceived || 0)));
+        const openings = await DB.getAll('opening_balances');
+        openings.forEach(o => {
+            if (o.type === 'farmer_payable') addParty('farmer', o.partyName, (o.amount || 0) - Utils.openingBalanceSettled(o));
+            if (o.type === 'farmer_advance') addParty('farmer', o.partyName, -(o.amount || 0));
+            if (o.type === 'buyer_receivable') addParty('buyer', o.partyName, (o.amount || 0) - Utils.openingBalanceSettled(o));
+            if (o.type === 'buyer_advance') addParty('buyer', o.partyName, -(o.amount || 0));
+        });
+        (await DB.getAll('farmer_advances')).filter(a => a.amount > 0).forEach(a => addParty('farmer', a.farmerName, -a.amount));
+        (await DB.getAll('purchase_payments')).forEach(p => addParty('farmer', p.farmerName, p.advanceDeducted || 0));
+        (await DB.getAll('sale_payments')).forEach(p => addParty('buyer', p.buyerName, p.advanceDeducted || 0));
+        const ops = [];
+        for (const store of ['warehouse_stock', 'party_running_balances']) {
+            (await DB.getAll(store)).forEach(record => ops.push({ storeName: store, action: 'delete', key: record.id ?? record.crop }));
         }
-
-        const partyCount = (await DB.getAll('party_running_balances')).length;
-        if (partyCount === 0) {
-            console.log('Backfilling party_running_balances...');
-            // Farmer payables
-            const purchases = await DB.getAll('purchases');
-            const farmerMap = {};
-            for (const p of purchases) {
-                if (!p.farmerName) continue;
-                const f = p.farmerName.trim().toLowerCase();
-                farmerMap[f] = (farmerMap[f] || 0) + ((p.netPayableAmount || p.amount || 0) - (p.amountPaid || 0));
-            }
-            const openingBalances = await DB.getAll('opening_balances');
-            for (const ob of openingBalances) {
-                if (ob.type === 'farmer_payable' && ob.partyName) {
-                    const f = ob.partyName.trim().toLowerCase();
-                    farmerMap[f] = (farmerMap[f] || 0) + (ob.amount || 0);
-                }
-                if (ob.type === 'farmer_advance' && ob.partyName) {
-                    const f = ob.partyName.trim().toLowerCase();
-                    farmerMap[f] = (farmerMap[f] || 0) - (ob.amount || 0);
-                }
-            }
-            const advances = await DB.getAll('farmer_advances');
-            for (const a of advances) {
-                if (a.farmerName) {
-                    const f = a.farmerName.trim().toLowerCase();
-                    farmerMap[f] = (farmerMap[f] || 0) - (a.amount || 0);
-                }
-            }
-            
-            for (const [f, bal] of Object.entries(farmerMap)) {
-                await DB.put('party_running_balances', { id: `farmer_${f}`, type: 'farmer', partyName: f, balance: bal });
-            }
-
-            // Buyer receivables
-            const sales = await DB.getAll('sales');
-            const buyerMap = {};
-            for (const s of sales) {
-                if (!s.buyerName) continue;
-                const b = s.buyerName.trim().toLowerCase();
-                buyerMap[b] = (buyerMap[b] || 0) + ((s.amount || 0) - (s.amountReceived || 0));
-            }
-            for (const ob of openingBalances) {
-                if (ob.type === 'buyer_receivable' && ob.partyName) {
-                    const b = ob.partyName.trim().toLowerCase();
-                    buyerMap[b] = (buyerMap[b] || 0) + (ob.amount || 0);
-                }
-                if (ob.type === 'buyer_advance' && ob.partyName) {
-                    const b = ob.partyName.trim().toLowerCase();
-                    buyerMap[b] = (buyerMap[b] || 0) - (ob.amount || 0);
-                }
-            }
-            for (const [b, bal] of Object.entries(buyerMap)) {
-                await DB.put('party_running_balances', { id: `buyer_${b}`, type: 'buyer', partyName: b, balance: bal });
-            }
-            console.log('party_running_balances backfilled.');
-        }
+        Object.entries(stock).forEach(([crop, netWeight]) => ops.push({ storeName: 'warehouse_stock', action: 'put', data: { crop, netWeight } }));
+        Object.values(parties).forEach(data => ops.push({ storeName: 'party_running_balances', action: 'put', data }));
+        await DB.commitUnitOfWork(ops);
     }
 };
 

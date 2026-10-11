@@ -46,46 +46,54 @@ const Reports = {
     // ═══════════════════════════════════════════════
     currentTab: 'pnl',
 
+    manualBalance(scoped, accounts, from = '', to = '') {
+        const names = Array.isArray(accounts) ? accounts : [accounts];
+        return (scoped.journals || []).filter(j => (!from || j.date >= from) && (!to || j.date <= to)).reduce((sum, j) =>
+            sum + (names.includes(j.debitAccount) ? j.amount : 0) - (names.includes(j.creditAccount) ? j.amount : 0), 0);
+    },
+
+    openingEquity(scoped, to) {
+        const cash = scoped.accounts.filter(a => !a.createdAt || String(a.createdAt).slice(0, 10) <= to).reduce((s, a) => s + (a.openingBalance || 0), 0);
+        return cash + scoped.openingBalances.filter(o => o.date <= to).reduce((s, o) =>
+            s + (['stock', 'farmer_advance', 'buyer_receivable'].includes(o.type) ? o.amount : ['farmer_payable', 'buyer_advance'].includes(o.type) ? -o.amount : 0), 0)
+            - this.manualBalance(scoped, 'Opening Equity', '', to);
+    },
+
+    manualProfit(scoped, from = '', to = '') {
+        return -this.manualBalance(scoped, ['Sales Revenue', 'Commission Revenue', 'Other Income', 'Stock Adjustment Gain', 'Operating Expenses', 'Cost of Goods Sold', 'Cost of Goods Sold (COGS)', 'Stock Shortage Loss'], from, to);
+    },
+
+    manualCash(scoped, from = '', to = '') {
+        return (scoped.journals || []).filter(j => (!from || j.date >= from) && (!to || j.date <= to)).reduce((sum, j) => {
+            const cash = a => a === 'Cash / Bank' || (a || '').startsWith('Bank/Cash: ');
+            return sum + (cash(j.debitAccount) ? j.amount : 0) - (cash(j.creditAccount) ? j.amount : 0);
+        }, 0);
+    },
+
+    journalCashActivity(scoped, activity, from, to) {
+        const cash = a => a === 'Cash / Bank' || (a || '').startsWith('Bank/Cash: ');
+        const entries = (scoped.journals || []).filter(j => {
+            const other = cash(j.debitAccount) ? j.creditAccount : j.debitAccount;
+            const category = /^(Owner |Partner |Opening Equity)/.test(other) ? 'financing' : other === 'Debts / Loans Receivable' ? 'investing' : 'operating';
+            return category === activity;
+        });
+        return this.manualCash({ journals: entries }, from, to);
+    },
+
     async getScopedData(fromDate = '', toDate = '') {
-        const activeSeason = await Utils.getActiveSeason();
-        let end = toDate;
-        if (activeSeason) {
-            end = (!end || end > activeSeason.endDate) ? activeSeason.endDate : end;
-        }
-
-        const fetchAllUpToEnd = async (storeName) => {
-            if (end) {
-                try {
-                    return await DB.getByDateRange(storeName, '', end);
-                } catch (e) {
-                    return Utils.filterBySeason(await DB.getAll(storeName), activeSeason);
-                }
-            }
-            return Utils.filterBySeason(await DB.getAll(storeName), activeSeason);
-        };
-
-        const purchases = await fetchAllUpToEnd('purchases');
-        const sales = await fetchAllUpToEnd('sales');
-        const adjustments = await fetchAllUpToEnd('stock_adjustments');
+        // Financial balances use complete real history. Carry-forward copies are never added to it.
+        const fetch = store => DB.getAll(store);
+        const purchases = (await fetch('purchases')).filter(p => p.type !== 'opening_balance' && (!toDate || p.date <= toDate));
+        const sales = (await fetch('sales')).filter(s => !toDate || s.date <= toDate);
+        const adjustments = (await fetch('stock_adjustments')).filter(a => !toDate || a.date <= toDate);
         const adjusted = Utils.applyStockAdjustments(purchases, sales, adjustments);
-
-        return {
-            purchases: adjusted.purchases,
-            sales: adjusted.sales,
-            expenses: await fetchAllUpToEnd('expenses'),
-            purchasePayments: await fetchAllUpToEnd('purchase_payments'),
-            salePayments: await fetchAllUpToEnd('sale_payments'),
-            openingBalancePayments: await fetchAllUpToEnd('opening_balance_payments'),
-            advances: await fetchAllUpToEnd('farmer_advances'),
-            capitalTxs: await fetchAllUpToEnd('capital_transactions'),
-            accounts: await DB.getAll('capital_accounts'),
-            capitalEntries: await fetchAllUpToEnd('capital_entries'),
-            companyDebts: await fetchAllUpToEnd('company_debts'),
-            partners: await DB.getAll('partners'),
-            partnerTxs: await fetchAllUpToEnd('partner_transactions'),
-            openingBalances: await fetchAllUpToEnd('opening_balances'),
-            stockAdjustments: adjustments
-        };
+        return { purchases: adjusted.purchases, sales: adjusted.sales, expenses: await fetch('expenses'),
+            purchasePayments: await fetch('purchase_payments'), salePayments: await fetch('sale_payments'),
+            openingBalancePayments: await fetch('opening_balance_payments'), advances: await fetch('farmer_advances'),
+            capitalTxs: await fetch('capital_transactions'), accounts: (await fetch('capital_accounts')).filter(a => !toDate || !a.createdAt || String(a.createdAt).slice(0, 10) <= toDate),
+            capitalEntries: await fetch('capital_entries'), companyDebts: await fetch('company_debts'),
+            partners: await fetch('partners'), partnerTxs: await fetch('partner_transactions'),
+            openingBalances: await fetch('opening_balances'), stockAdjustments: adjustments, journals: await fetch('journal_entries') };
     },
 
     inRange(records, from, to) {
@@ -97,7 +105,8 @@ const Reports = {
     },
 
     cogsForSales(sales, inventoryMetrics) {
-        return sales.reduce((sum, sale) => sum + (inventoryMetrics[sale.crop]?.saleCogs?.[sale.id] || 0), 0);
+        const costs = Object.assign({}, ...Object.values(inventoryMetrics).map(crop => crop.saleCogs || {}));
+        return sales.reduce((sum, sale) => sum + (costs[sale.id] || 0), 0);
     },
 
     switchTab(tab) {
@@ -134,17 +143,17 @@ const Reports = {
         const actualSales = sales.filter(s => s.type !== 'stock_adjustment');
         const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
 
-        const salesRevenue = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
-        const commissionRevenue = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+        const salesRevenue = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
+        const commissionRevenue = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
         const totalRevenue = salesRevenue + commissionRevenue;
 
         const salesUntilTo = (scoped.sales || []).filter(s => s.date <= to);
         const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => e.date <= to));
-        const totalCOGS = this.cogsForSales(actualSales, inventoryMetrics);
-        const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics);
+        const totalCOGS = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
+        const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
         
         const grossProfit = salesRevenue - totalCOGS + commissionRevenue;
-        const totalExpenses = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+        const totalExpenses = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
         const netProfit = grossProfit - inventoryLoss - totalExpenses;
         const grossMargin = totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(1) : '0.0';
         const netMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0.0';
@@ -153,7 +162,7 @@ const Reports = {
         const purchasesUntilTo = (scoped.purchases || []).filter(p => p.date <= to);
         const salesUntilToFilter = (scoped.sales || []).filter(s => s.date <= to);
 
-        const totalFarmerPayable = purchasesUntilTo.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+        const totalFarmerPayable = purchasesUntilTo.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
         const totalFarmerPaid = purchasesUntilTo.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments || [], 'purchaseId', 'amountPaid', to), 0);
         const openingPayableAsOf = (scoped.openingBalances || []).filter(o => o.type === 'farmer_payable' && o.date <= to).reduce((s, o) => s + (o.amount || 0), 0);
         const openingPaidAsOf = (scoped.openingBalancePayments || []).filter(p => p.type === 'farmer_payable' && p.date <= to).reduce((s, p) => s + (p.amount || 0), 0);
@@ -168,6 +177,8 @@ const Reports = {
         // Expense breakdown
         const expByType = {};
         operatingExpenses.forEach(e => { expByType[e.type] = (expByType[e.type] || 0) + e.amount; });
+        const manualExpenses = this.manualBalance(scoped, 'Operating Expenses', from, to);
+        if (manualExpenses) expByType['Manual journal adjustments'] = manualExpenses;
 
         // Crop-wise breakdown
         const crops = [...new Set([...purchases.map(p => p.crop), ...sales.map(s => s.crop)].filter(Boolean))];
@@ -201,7 +212,7 @@ const Reports = {
                 <div class="card-header"><h3 class="card-title">Profit & Loss Statement</h3><span style="color:var(--text-muted);font-size:0.8rem">${Utils.formatDate(from)} — ${Utils.formatDate(to)}</span></div>
                 <div class="summary-box">
                     <div class="summary-row"><span class="summary-label">Sales Revenue</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(salesRevenue)}</span></div>
-                    ${commissionRevenue > 0 ? `<div class="summary-row"><span class="summary-label">Commission Revenue (Aarhat)</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(commissionRevenue)}</span></div>` : ''}
+                    ${commissionRevenue > 0 ? `<div class="summary-row"><span class="summary-label">Commission / Other Income</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(commissionRevenue)}</span></div>` : ''}
                     <div class="summary-row" style="border-top:1px solid var(--border-color)"><span class="summary-label"><strong>Total Gross Revenue</strong></span><span class="summary-value" style="color:var(--accent-success)"><strong>PKR ${Utils.formatPKR(totalRevenue)}</strong></span></div>
                     <div class="summary-row"><span class="summary-label">Less: Cost of Goods Sold</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(totalCOGS)} )</span></div>
                     <div class="summary-row total"><span class="summary-label">Gross Profit</span><span class="summary-value" style="color:${grossProfit >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(grossProfit)}</span></div>
@@ -270,7 +281,7 @@ const Reports = {
         const totalSalesReceived = allSales.reduce((s, x) => s + Utils.paymentTotalFor(x, scoped.salePayments || [], 'saleId', 'amountReceived', toDate), 0);
         const openingReceivable = allOpenings.filter(o => o.type === 'buyer_receivable').reduce((s, o) => s + (o.amount || 0), 0);
         const openingReceipts = allOpeningPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
-        const accountsReceivable = totalSalesRevenue - totalSalesReceived + openingReceivable - openingReceipts;
+        const accountsReceivable = totalSalesRevenue - totalSalesReceived + openingReceivable - openingReceipts + this.manualBalance(scoped, 'Accounts Receivable (Buyer)', '', toDate);
 
         // 2. Farmer Advances (Subtract Recovered and Adjusted Advances)
         const allPurchasePayments = this.until(scoped.purchasePayments || [], toDate);
@@ -278,12 +289,12 @@ const Reports = {
         const givenAdvances = allAdvances.filter(a => (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
         const recoveredAdvances = allPurchases.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
         const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-        const farmerAdvances = Math.max(0, openingFarmerAdvances + givenAdvances - recoveredAdvances - adjustedAdvances);
+        const farmerAdvances = Math.max(0, openingFarmerAdvances + givenAdvances - recoveredAdvances - adjustedAdvances) + this.manualBalance(scoped, 'Advances to Farmers', '', toDate);
         
         const allDebts = this.until(scoped.companyDebts || [], toDate);
         const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
         const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
-        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid);
+        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid) + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
         
         // 3. Cash & Bank
         let totalCashBank = 0;
@@ -296,25 +307,27 @@ const Reports = {
             return { name: acc.name, balance: bal };
         });
 
+        totalCashBank += this.manualCash({ journals: scoped.journals.filter(j => !j.cashPosted) }, '', toDate);
         const inventoryMetrics = Utils.calculateInventoryLots(allPurchases, allSales, allExpenses);
-        const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
+        const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0) + this.manualBalance(scoped, 'Inventory / Purchases', '', toDate);
 
         const totalAssets = accountsReceivable + farmerAdvances + debtsReceivable + totalCashBank + inventoryValue;
 
         // Liabilities
         // Accounts Payable
-        const totalPurchasesCost = allPurchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+        const totalPurchasesCost = allPurchases.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
         const totalPurchasesPaid = allPurchases.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments || [], 'purchaseId', 'amountPaid', toDate), 0);
         const openingPayable = allOpenings.filter(o => o.type === 'farmer_payable').reduce((s, o) => s + (o.amount || 0), 0);
         const openingPayments = allOpeningPayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
-        const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments;
-        const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
-        const totalLiabilities = accountsPayable + buyerAdvances;
+        const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments - this.manualBalance(scoped, 'Accounts Payable (Farmer)', '', toDate);
+        const buyerAdvances = Math.max(0, allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0) - (scoped.salePayments || []).filter(p => p.date <= toDate).reduce((s, p) => s + (p.advanceDeducted || 0), 0)) - this.manualBalance(scoped, 'Advances from Buyers', '', toDate);
+        const mandiTax = allPurchases.reduce((sum, p) => sum + (p.mandiTaxTotal || 0), 0) - this.manualBalance(scoped, 'Mandi Tax Payable', '', toDate);
+        const totalLiabilities = accountsPayable + buyerAdvances + mandiTax;
 
         // Equity (from Capital Entries)
         const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
         const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
-            capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
+            capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) - this.manualBalance(scoped, ['Owner Capital', 'Owner Drawings'], '', toDate);
 
         const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
         const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
@@ -324,14 +337,15 @@ const Reports = {
         const cogsUntilTo = this.cogsForSales(actualSalesUntilTo, inventoryMetrics);
         const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
         const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
-        const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo;
+        const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo + this.manualProfit(scoped, '', toDate);
         
         const partnerTxs = this.until(scoped.partnerTxs || [], toDate);
         const partnerCapital = partnerTxs.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
             partnerTxs.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) -
-            partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0);
+            partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0) - this.manualBalance(scoped, ['Partner Capital', 'Partner Drawings / Profit Payouts'], '', toDate);
         
-        const netEquity = ownerCapital + partnerCapital + retainedEarnings;
+        const openingEquity = this.openingEquity(scoped, toDate);
+        const netEquity = ownerCapital + partnerCapital + retainedEarnings + openingEquity;
 
         const container = document.getElementById('report-content');
         container.innerHTML = `
@@ -356,12 +370,14 @@ const Reports = {
                     
                     <div class="summary-row"><span class="summary-label" style="padding-left:12px; font-weight:bold;">Liabilities</span><span></span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Accounts Payable (Farmers)</span><span class="summary-value">PKR ${Utils.formatPKR(accountsPayable)}</span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Mandi Tax Payable</span><span class="summary-value">PKR ${Utils.formatPKR(mandiTax)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Advances from Buyers</span><span class="summary-value">PKR ${Utils.formatPKR(buyerAdvances)}</span></div>
                     <div class="summary-row" style="border-top: 1px solid var(--border-color); margin-top: 8px;"><span class="summary-label"><strong>Total Liabilities</strong></span><span class="summary-value" style="color:var(--accent-danger)"><strong>PKR ${Utils.formatPKR(totalLiabilities)}</strong></span></div>
                     
                     <div style="height:10px;"></div>
                     
                     <div class="summary-row"><span class="summary-label" style="padding-left:12px; font-weight:bold;">Equity (IAS 1 Presentation)</span><span></span></div>
+                    <div class="summary-row"><span class="summary-label" style="padding-left:24px">Opening Equity</span><span class="summary-value">PKR ${Utils.formatPKR(openingEquity)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Owner Capital Contributions</span><span class="summary-value">PKR ${Utils.formatPKR(ownerCapital)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Partners Net Capital & Share Equity</span><span class="summary-value">PKR ${Utils.formatPKR(partnerCapital)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Accumulated Retained Earnings / (Loss)</span><span class="summary-value" style="color:${retainedEarnings >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(retainedEarnings)}</span></div>
@@ -389,21 +405,24 @@ const Reports = {
         // Operating Activities
         const cashFromInitialSales = sales.reduce((sum, sale) => {
             const later = (scoped.salePayments || []).filter(p => p.saleId === sale.id).reduce((s, p) => s + (p.amount || 0), 0);
-            return sum + Math.max(0, (sale.amountReceived || 0) - later);
+            return sum + Utils.initialPaymentFor(sale, scoped.salePayments || [], 'saleId', 'amountReceived');
         }, 0);
         const cashToInitialPurchases = purchases.reduce((sum, purchase) => {
             const later = (scoped.purchasePayments || []).filter(p => p.purchaseId === purchase.id).reduce((s, p) => s + (p.amount || 0), 0);
-            return sum + Math.max(0, (purchase.amountPaid || 0) - later);
+            return sum + Utils.initialPaymentFor(purchase, scoped.purchasePayments || [], 'purchaseId', 'amountPaid');
         }, 0);
 
-        const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + (x.amount || 0), 0);
-        const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + (x.amount || 0), 0);
+        const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
+        const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
         const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
         const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
-        const cashToAdvances = advances.filter(a => a.amount > 0).reduce((s, a) => s + a.amount, 0);
+        const cashToAdvances = advances.filter(a => a.amount > 0 && a.sourceStore !== 'purchase_payments').reduce((s, a) => s + a.amount, 0);
         const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
         
-        const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
+        const journalCash = this.journalCashActivity(scoped, 'operating', fromDate, toDate);
+        const journalFinancing = this.journalCashActivity(scoped, 'financing', fromDate, toDate);
+        const journalInvesting = this.journalCashActivity(scoped, 'investing', fromDate, toDate);
+        const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses + journalCash;
 
         // Financing Activities (from Capital Entries & Loans)
         const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
@@ -418,9 +437,9 @@ const Reports = {
         const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
         const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
         
-        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows;
+        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing;
 
-        const netCashFlow = netOperatingCash + netFinancingCash;
+        const netCashFlow = netOperatingCash + netFinancingCash + journalInvesting;
 
         // Beginning and Ending Cash Balances
         const allCapTxUntilFrom = (scoped.capitalTxs || []).filter(t => t.date < fromDate);
@@ -429,6 +448,7 @@ const Reports = {
             if (t.type === 'deposit') beginningCashBalance += t.amount;
             else if (t.type === 'withdrawal') beginningCashBalance -= t.amount;
         });
+        beginningCashBalance += this.manualCash({ journals: scoped.journals.filter(j => !j.cashPosted && j.date < fromDate) });
         const endingCashBalance = beginningCashBalance + netCashFlow;
 
         const container = document.getElementById('report-content');
@@ -438,6 +458,7 @@ const Reports = {
                 <div class="summary-box">
                     <div class="summary-row total"><span class="summary-label"><strong>CASH FLOWS FROM OPERATING ACTIVITIES</strong></span></div>
                     
+                    <div class="summary-row"><span class="summary-label">Manual journal operating cash</span><span class="summary-value">PKR ${Utils.formatPKR(journalCash)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Cash received from Buyers</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(cashFromSales)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Opening Balance Receipts</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(cashFromOpeningReceivables)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Cash paid to Farmers</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(cashToPurchases)} )</span></div>
@@ -449,7 +470,9 @@ const Reports = {
                     
                     <div style="height:20px;"></div>
 
+                    <div class="summary-row"><span class="summary-label">Manual journal investing cash</span><span class="summary-value">PKR ${Utils.formatPKR(journalInvesting)}</span></div>
                     <div class="summary-row total"><span class="summary-label"><strong>CASH FLOWS FROM FINANCING ACTIVITIES</strong></span></div>
+                    <div class="summary-row"><span class="summary-label">Manual journal financing cash</span><span class="summary-value">PKR ${Utils.formatPKR(journalFinancing)}</span></div>
                     
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Capital Invested / Deposits</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(capitalDeposits)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Capital Withdrawn</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(capitalWithdrawals)} )</span></div>
@@ -496,20 +519,22 @@ const Reports = {
             const actualSales = sales.filter(s => s.type !== 'stock_adjustment');
             const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
 
-            const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
-            const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+            const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
+            const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
             const rev = salesRev + commRev;
             const salesUntilTo = (scoped.sales || []).filter(s => s.date <= to);
             const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => e.date <= to));
-            const cogs = this.cogsForSales(actualSales, inventoryMetrics);
-            const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics);
+            const cogs = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
+            const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
             const closingInventory = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
-            const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+            const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
             const gross = salesRev - cogs + commRev;
             const net = gross - inventoryLoss - exp;
 
             const expByType = {};
             operatingExpenses.forEach(e => { expByType[e.type] = (expByType[e.type] || 0) + e.amount; });
+            const manualExpenses = this.manualBalance(scoped, 'Operating Expenses', from, to);
+            if (manualExpenses) expByType['Manual journal adjustments'] = manualExpenses;
 
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF();
@@ -704,21 +729,21 @@ const Reports = {
             const actualSales = sales.filter(s => s.type !== 'stock_adjustment');
             const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
 
-            const salesRev    = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
-            const commRev     = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+            const salesRev    = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
+            const commRev     = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
             const rev         = salesRev + commRev;
             const salesUntilTo = scoped.sales.filter(s => s.date <= to);
             const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases.filter(p => p.date <= to), salesUntilTo, scoped.expenses.filter(e => e.date <= to));
-            const cogs        = this.cogsForSales(actualSales, inventoryMetrics);
-            const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics);
-            const exp         = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+            const cogs        = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
+            const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
+            const exp         = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
             const grossProfit = salesRev - cogs + commRev;
             const netProfit   = grossProfit - inventoryLoss - exp;
 
             // Outstanding True Balances As Of 'to' date
             const purchasesUntilTo = scoped.purchases.filter(p => p.date <= to);
             
-            const purchasePayable = purchasesUntilTo.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+            const purchasePayable = purchasesUntilTo.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
             const totalFarmerPaid = purchasesUntilTo.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments, 'purchaseId', 'amountPaid', to), 0);
             const totalBuyerReceived = salesUntilTo.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.salePayments, 'saleId', 'amountReceived', to), 0);
             const openingPayableAsOf = scoped.openingBalances.filter(o => o.type === 'farmer_payable' && o.date <= to).reduce((s, o) => s + (o.amount || 0), 0);
@@ -730,6 +755,8 @@ const Reports = {
 
             const expByType = {};
             operatingExpenses.forEach(e => { expByType[e.type] = (expByType[e.type] || 0) + e.amount; });
+            const manualExpenses = this.manualBalance(scoped, 'Operating Expenses', from, to);
+            if (manualExpenses) expByType['Manual journal adjustments'] = manualExpenses;
 
             // ── KEY METRICS TABLE ──
             doc.autoTable({
@@ -905,18 +932,18 @@ const Reports = {
             const totalSalesReceived = allSales.reduce((s, x) => s + Utils.paymentTotalFor(x, scoped.salePayments, 'saleId', 'amountReceived', toDate), 0);
             const openingReceivable = allOpenings.filter(o => o.type === 'buyer_receivable').reduce((s, o) => s + (o.amount || 0), 0);
             const openingReceived = allOpeningPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
-            const accountsReceivable = totalSalesAmt - totalSalesReceived + openingReceivable - openingReceived;
+            const accountsReceivable = totalSalesAmt - totalSalesReceived + openingReceivable - openingReceived + this.manualBalance(scoped, 'Accounts Receivable (Buyer)', '', toDate);
 
             const allPurchasePayments = (scoped.purchasePayments || []).filter(p => p.date <= toDate);
             const openingAdvances = allOpenings.filter(o => o.type === 'farmer_advance').reduce((s, o) => s + (o.amount || 0), 0);
             const givenAdvances = scoped.advances.filter(a => a.date <= toDate && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
             const recoveredAdvances = allPurchases.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-            const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances);
+            const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances) + this.manualBalance(scoped, 'Advances to Farmers', '', toDate);
             const allDebts = this.until(scoped.companyDebts || [], toDate);
             const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
             const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
-            const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid);
+            const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid) + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
 
             let totalCashBank = 0;
             allAccs.forEach(acc => {
@@ -926,21 +953,23 @@ const Reports = {
                 totalCashBank += (acc.openingBalance || 0) + deps - wids;
             });
 
+            totalCashBank += this.manualCash({ journals: scoped.journals.filter(j => !j.cashPosted) }, '', toDate);
             const inventoryMetrics = Utils.calculateInventoryLots(allPurchases, allSales, allExpenses);
-            const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
+            const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0) + this.manualBalance(scoped, 'Inventory / Purchases', '', toDate);
             const totalAssets = accountsReceivable + farmerAdvances + debtsReceivable + totalCashBank + inventoryValue;
 
-            const totalPurchasesCost = allPurchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+            const totalPurchasesCost = allPurchases.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
             const totalPurchasesPaid = allPurchases.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments, 'purchaseId', 'amountPaid', toDate), 0);
             const openingPayable = allOpenings.filter(o => o.type === 'farmer_payable').reduce((s, o) => s + (o.amount || 0), 0);
             const openingPayments = allOpeningPayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
-            const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments;
-            const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
-            const totalLiabilities = accountsPayable + buyerAdvances;
+            const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments - this.manualBalance(scoped, 'Accounts Payable (Farmer)', '', toDate);
+            const buyerAdvances = Math.max(0, allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0) - (scoped.salePayments || []).filter(p => p.date <= toDate).reduce((s, p) => s + (p.advanceDeducted || 0), 0)) - this.manualBalance(scoped, 'Advances from Buyers', '', toDate);
+            const mandiTax = allPurchases.reduce((sum, p) => sum + (p.mandiTaxTotal || 0), 0) - this.manualBalance(scoped, 'Mandi Tax Payable', '', toDate);
+            const totalLiabilities = accountsPayable + buyerAdvances + mandiTax;
 
             const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
             const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
-                capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
+                capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) - this.manualBalance(scoped, ['Owner Capital', 'Owner Drawings'], '', toDate);
 
             const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
             const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
@@ -950,14 +979,15 @@ const Reports = {
             const cogsUntilTo = this.cogsForSales(actualSalesUntilTo, inventoryMetrics);
             const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
             const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
-            const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo;
+            const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo + this.manualProfit(scoped, '', toDate);
             
             const partnerTxs = this.until(scoped.partnerTxs || [], toDate);
             const partnerCapital = partnerTxs.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
                 partnerTxs.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) -
-                partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0);
+                partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0) - this.manualBalance(scoped, ['Partner Capital', 'Partner Drawings / Profit Payouts'], '', toDate);
                 
-            const netEquity = ownerCapital + partnerCapital + retainedEarnings;
+            const openingEquity = this.openingEquity(scoped, toDate);
+            const netEquity = ownerCapital + partnerCapital + retainedEarnings + openingEquity;
 
             const biz = await Settings.getBusiness();
             const { jsPDF } = window.jspdf;
@@ -1011,6 +1041,7 @@ const Reports = {
             drawSectionHeader('LIABILITIES & EQUITY');
             drawRow('Accounts Payable (Farmers)', accountsPayable);
             drawRow('Advances from Buyers', buyerAdvances);
+            drawRow('Mandi Tax Payable', mandiTax);
             drawRow('Total Current Liabilities', totalLiabilities, true);
             y += 4;
             doc.setFont('helvetica', 'bold');
@@ -1018,6 +1049,7 @@ const Reports = {
             doc.setTextColor(30, 41, 59);
             doc.text('Equity (IAS 1 Presentation)', 16, y);
             y += 6;
+            drawRow('Opening Equity', openingEquity);
             drawRow('Owner Capital Contributions', ownerCapital);
             drawRow('Partners Net Capital & Share Equity', partnerCapital);
             drawRow('Accumulated Retained Earnings / (Loss)', retainedEarnings);
@@ -1058,19 +1090,22 @@ const Reports = {
 
             const cashFromInitialSales = sales.reduce((sum, sale) => {
                 const later = scoped.salePayments.filter(p => p.saleId === sale.id).reduce((s, p) => s + (p.amount || 0), 0);
-                return sum + Math.max(0, (sale.amountReceived || 0) - later);
+                return sum + Utils.initialPaymentFor(sale, scoped.salePayments || [], 'saleId', 'amountReceived');
             }, 0);
             const cashToInitialPurchases = purchases.reduce((sum, purchase) => {
                 const later = scoped.purchasePayments.filter(p => p.purchaseId === purchase.id).reduce((s, p) => s + (p.amount || 0), 0);
-                return sum + Math.max(0, (purchase.amountPaid || 0) - later);
+                return sum + Utils.initialPaymentFor(purchase, scoped.purchasePayments || [], 'purchaseId', 'amountPaid');
             }, 0);
-            const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + (x.amount || 0), 0);
-            const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + (x.amount || 0), 0);
+            const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
+            const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
             const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
             const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
-            const cashToAdvances = advances.filter(a => a.amount > 0).reduce((s, a) => s + a.amount, 0);
+            const cashToAdvances = advances.filter(a => a.amount > 0 && a.sourceStore !== 'purchase_payments').reduce((s, a) => s + a.amount, 0);
             const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
-            const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
+            const journalCash = this.journalCashActivity(scoped, 'operating', fromDate, toDate);
+            const journalFinancing = this.journalCashActivity(scoped, 'financing', fromDate, toDate);
+            const journalInvesting = this.journalCashActivity(scoped, 'investing', fromDate, toDate);
+            const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses + journalCash;
 
             const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
             const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
@@ -1084,8 +1119,8 @@ const Reports = {
             const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
             const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
 
-            const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows;
-            const netCashFlow = netOperatingCash + netFinancingCash;
+            const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing;
+            const netCashFlow = netOperatingCash + netFinancingCash + journalInvesting;
 
             const biz = await Settings.getBusiness();
             const { jsPDF } = window.jspdf;
@@ -1135,10 +1170,13 @@ const Reports = {
             drawRow('Advances paid to Farmers', cashToAdvances, true);
             drawRow('Operating Expenses paid', cashToExpenses, true);
             y += 2;
+            drawRow('Manual journal operating cash', journalCash, journalCash < 0);
             drawRow('Net Cash from Operating Activities', netOperatingCash, netOperatingCash < 0, true);
 
             y += 6;
             drawSectionHeader('FINANCING ACTIVITIES');
+            drawRow('Manual journal financing cash', journalFinancing, journalFinancing < 0);
+            drawRow('Manual journal investing cash', journalInvesting, journalInvesting < 0);
             drawRow('Owner Capital Injections', capitalDeposits);
             drawRow('Owner Capital Withdrawals', capitalWithdrawals, true);
             drawRow('Partners Capital Contributions', partnerContributions);
@@ -1192,18 +1230,18 @@ const Reports = {
         const totalSalesReceived = allSales.reduce((s, x) => s + Utils.paymentTotalFor(x, scoped.salePayments, 'saleId', 'amountReceived', toDate), 0);
         const openingReceivable = allOpenings.filter(o => o.type === 'buyer_receivable').reduce((s, o) => s + (o.amount || 0), 0);
         const openingReceived = allOpeningPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
-        const accountsReceivable = totalSalesAmt - totalSalesReceived + openingReceivable - openingReceived;
+        const accountsReceivable = totalSalesAmt - totalSalesReceived + openingReceivable - openingReceived + this.manualBalance(scoped, 'Accounts Receivable (Buyer)', '', toDate);
 
         const allPurchasePayments = (scoped.purchasePayments || []).filter(p => p.date <= toDate);
         const openingAdvances = allOpenings.filter(o => o.type === 'farmer_advance').reduce((s, o) => s + (o.amount || 0), 0);
         const givenAdvances = scoped.advances.filter(a => a.date <= toDate && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
         const recoveredAdvances = allPurchases.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
         const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-        const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances);
+        const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances) + this.manualBalance(scoped, 'Advances to Farmers', '', toDate);
         const allDebts = this.until(scoped.companyDebts || [], toDate);
         const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
         const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
-        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid);
+        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid) + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
 
         let totalCashBank = 0;
         allAccs.forEach(acc => {
@@ -1213,21 +1251,23 @@ const Reports = {
             totalCashBank += (acc.openingBalance || 0) + deps - wids;
         });
 
+        totalCashBank += this.manualCash({ journals: scoped.journals.filter(j => !j.cashPosted) }, '', toDate);
         const inventoryMetrics = Utils.calculateInventoryLots(allPurchases, allSales, allExpenses);
-        const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
+        const inventoryValue = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0) + this.manualBalance(scoped, 'Inventory / Purchases', '', toDate);
         const totalAssets = accountsReceivable + farmerAdvances + debtsReceivable + totalCashBank + inventoryValue;
 
-        const totalPurchasesCost = allPurchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+        const totalPurchasesCost = allPurchases.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
         const totalPurchasesPaid = allPurchases.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments, 'purchaseId', 'amountPaid', toDate), 0);
         const openingPayable = allOpenings.filter(o => o.type === 'farmer_payable').reduce((s, o) => s + (o.amount || 0), 0);
         const openingPayments = allOpeningPayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
-        const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments;
-        const buyerAdvances = allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0);
-        const totalLiabilities = accountsPayable + buyerAdvances;
+        const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments - this.manualBalance(scoped, 'Accounts Payable (Farmer)', '', toDate);
+        const buyerAdvances = Math.max(0, allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0) - (scoped.salePayments || []).filter(p => p.date <= toDate).reduce((s, p) => s + (p.advanceDeducted || 0), 0)) - this.manualBalance(scoped, 'Advances from Buyers', '', toDate);
+        const mandiTax = allPurchases.reduce((sum, p) => sum + (p.mandiTaxTotal || 0), 0) - this.manualBalance(scoped, 'Mandi Tax Payable', '', toDate);
+        const totalLiabilities = accountsPayable + buyerAdvances + mandiTax;
 
         const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
         const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
-            capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0);
+            capitalEntries.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) - this.manualBalance(scoped, ['Owner Capital', 'Owner Drawings'], '', toDate);
 
         const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
         const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
@@ -1237,14 +1277,15 @@ const Reports = {
         const cogsUntilTo = this.cogsForSales(actualSalesUntilTo, inventoryMetrics);
         const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
         const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
-        const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo;
+        const retainedEarnings = totalRevUntilTo - cogsUntilTo - invLossUntilTo - opExpUntilTo + this.manualProfit(scoped, '', toDate);
         
         const partnerTxs = this.until(scoped.partnerTxs || [], toDate);
         const partnerCapital = partnerTxs.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
             partnerTxs.filter(e => e.type === 'drawing').reduce((s, e) => s + e.amount, 0) -
-            partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0);
+            partnerTxs.filter(e => e.type === 'profit_payout').reduce((s, e) => s + e.amount, 0) - this.manualBalance(scoped, ['Partner Capital', 'Partner Drawings / Profit Payouts'], '', toDate);
 
-        const netEquity = ownerCapital + partnerCapital + retainedEarnings;
+        const openingEquity = this.openingEquity(scoped, toDate);
+        const netEquity = ownerCapital + partnerCapital + retainedEarnings + openingEquity;
 
         const rows = [
             { Category: 'ASSETS', Item: 'Accounts Receivable (Buyers)', Amount: accountsReceivable },
@@ -1255,7 +1296,9 @@ const Reports = {
             { Category: 'ASSETS', Item: 'TOTAL ASSETS', Amount: totalAssets },
             { Category: 'LIABILITIES', Item: 'Accounts Payable (Farmers)', Amount: accountsPayable },
             { Category: 'LIABILITIES', Item: 'Advances from Buyers', Amount: buyerAdvances },
+            { Category: 'LIABILITIES', Item: 'Mandi Tax Payable', Amount: mandiTax },
             { Category: 'LIABILITIES', Item: 'TOTAL LIABILITIES', Amount: totalLiabilities },
+            { Category: 'EQUITY', Item: 'Opening Equity', Amount: openingEquity },
             { Category: 'EQUITY', Item: 'Owner Capital Contributions', Amount: ownerCapital },
             { Category: 'EQUITY', Item: 'Partners Net Capital & Share Equity', Amount: partnerCapital },
             { Category: 'EQUITY', Item: 'Accumulated Retained Earnings / (Loss)', Amount: retainedEarnings },
@@ -1287,19 +1330,22 @@ const Reports = {
 
         const cashFromInitialSales = sales.reduce((sum, sale) => {
             const later = scoped.salePayments.filter(p => p.saleId === sale.id).reduce((s, p) => s + (p.amount || 0), 0);
-            return sum + Math.max(0, (sale.amountReceived || 0) - later);
+            return sum + Utils.initialPaymentFor(sale, scoped.salePayments || [], 'saleId', 'amountReceived');
         }, 0);
         const cashToInitialPurchases = purchases.reduce((sum, purchase) => {
             const later = scoped.purchasePayments.filter(p => p.purchaseId === purchase.id).reduce((s, p) => s + (p.amount || 0), 0);
-            return sum + Math.max(0, (purchase.amountPaid || 0) - later);
+            return sum + Utils.initialPaymentFor(purchase, scoped.purchasePayments || [], 'purchaseId', 'amountPaid');
         }, 0);
-        const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + (x.amount || 0), 0);
-        const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + (x.amount || 0), 0);
+        const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
+        const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
         const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
         const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
-        const cashToAdvances = advances.filter(a => a.amount > 0).reduce((s, a) => s + a.amount, 0);
+        const cashToAdvances = advances.filter(a => a.amount > 0 && a.sourceStore !== 'purchase_payments').reduce((s, a) => s + a.amount, 0);
         const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
-        const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses;
+        const journalCash = this.journalCashActivity(scoped, 'operating', fromDate, toDate);
+        const journalFinancing = this.journalCashActivity(scoped, 'financing', fromDate, toDate);
+        const journalInvesting = this.journalCashActivity(scoped, 'investing', fromDate, toDate);
+        const netOperatingCash = cashFromSales + cashFromOpeningReceivables - cashToPurchases - cashToOpeningPayables - cashToAdvances - cashToExpenses + journalCash;
 
         const capitalEntries = this.inRange(scoped.capitalEntries || [], fromDate, toDate);
         const capitalDeposits = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0);
@@ -1313,8 +1359,8 @@ const Reports = {
         const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
         const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
 
-        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows;
-        const netCashFlow = netOperatingCash + netFinancingCash;
+        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing;
+        const netCashFlow = netOperatingCash + netFinancingCash + journalInvesting;
 
         const rows = [
             { Category: 'OPERATING', Item: 'Cash Received from Buyers', Amount: cashFromSales },
@@ -1323,7 +1369,10 @@ const Reports = {
             { Category: 'OPERATING', Item: 'Opening Balance Payments', Amount: -cashToOpeningPayables },
             { Category: 'OPERATING', Item: 'Advances Paid to Farmers', Amount: -cashToAdvances },
             { Category: 'OPERATING', Item: 'Operating Expenses Paid', Amount: -cashToExpenses },
+            { Category: 'OPERATING', Item: 'Manual journal operating cash', Amount: journalCash },
             { Category: 'OPERATING', Item: 'NET OPERATING CASH FLOW', Amount: netOperatingCash },
+            { Category: 'INVESTING', Item: 'Manual journal investing cash', Amount: journalInvesting },
+            { Category: 'FINANCING', Item: 'Manual journal financing cash', Amount: journalFinancing },
             { Category: 'FINANCING', Item: 'Owner Capital Injections', Amount: capitalDeposits },
             { Category: 'FINANCING', Item: 'Owner Capital Withdrawals', Amount: -capitalWithdrawals },
             { Category: 'FINANCING', Item: 'Partners Capital Contributions', Amount: partnerContributions },
@@ -1354,24 +1403,26 @@ const Reports = {
         const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
         const expenses = this.inRange(scoped.expenses || [], from, to);
         const operatingExpenses = expenses.filter(e => !e.purchaseId);
-        const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
-        const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+        const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
+        const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
         const rev = salesRev + commRev;
         const salesUntilTo = (scoped.sales || []).filter(s => s.date <= to);
         const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => e.date <= to));
-        const cogs = this.cogsForSales(actualSales, inventoryMetrics);
-        const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics);
-        const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
+        const cogs = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
+        const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
+        const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
         const gross = salesRev - cogs + commRev;
         const netProfit = gross - inventoryLoss - exp;
 
         // Expense breakdown
         const expByType = {};
         operatingExpenses.forEach(e => { expByType[e.type] = (expByType[e.type] || 0) + e.amount; });
+        const manualExpenses = this.manualBalance(scoped, 'Operating Expenses', from, to);
+        if (manualExpenses) expByType['Manual journal adjustments'] = manualExpenses;
 
         const rows = [
             { Section: 'Revenue', Item: 'Gross Sales Revenue', Amount: salesRev },
-            { Section: 'Revenue', Item: 'Commission Revenue (Aarhat)', Amount: commRev },
+            { Section: 'Revenue', Item: 'Commission / Other Income', Amount: commRev },
             { Section: '', Item: 'Total Gross Revenue', Amount: rev },
             { Section: 'COGS', Item: 'Cost of Goods Sold', Amount: cogs },
             { Section: '', Item: 'GROSS PROFIT', Amount: gross },
@@ -1404,18 +1455,18 @@ const Reports = {
         const expenses = this.inRange(scoped.expenses, from, to);
         const operatingExpenses = expenses.filter(e => !e.purchaseId);
 
-        const rev = sales.reduce((s, x) => s + (x.amount || 0), 0);
+        const rev = sales.reduce((s, x) => s + (x.amount || 0), 0) + purchases.reduce((sum, p) => sum + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Sales Revenue', 'Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
         const salesUntilTo = scoped.sales.filter(s => s.date <= to);
         const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases.filter(p => p.date <= to), salesUntilTo, scoped.expenses.filter(e => e.date <= to));
-        const cogs = this.cogsForSales(sales, inventoryMetrics);
-        const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-        const purchasePayable = purchases.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+        const cogs = this.cogsForSales(sales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)', 'Stock Shortage Loss'], from, to);
+        const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
+        const purchasePayable = purchases.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
         const openingPayableAsOf = scoped.openingBalances.filter(o => o.type === 'farmer_payable' && o.date <= to).reduce((s, o) => s + (o.amount || 0), 0);
         const openingPaidAsOf = scoped.openingBalancePayments.filter(p => p.type === 'farmer_payable' && p.date <= to).reduce((s, p) => s + (p.amount || 0), 0);
         const openingReceivableAsOf = scoped.openingBalances.filter(o => o.type === 'buyer_receivable' && o.date <= to).reduce((s, o) => s + (o.amount || 0), 0);
         const openingReceivedAsOf = scoped.openingBalancePayments.filter(p => p.type === 'buyer_receivable' && p.date <= to).reduce((s, p) => s + (p.amount || 0), 0);
         const farmerOutstanding = purchasePayable - purchases.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.purchasePayments, 'purchaseId', 'amountPaid', to), 0) + openingPayableAsOf - openingPaidAsOf;
-        const buyerOutstanding = rev - sales.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.salePayments, 'saleId', 'amountReceived', to), 0) + openingReceivableAsOf - openingReceivedAsOf;
+        const buyerOutstanding = sales.reduce((sum, sale) => sum + (sale.amount || 0), 0) - sales.reduce((s, p) => s + Utils.paymentTotalFor(p, scoped.salePayments, 'saleId', 'amountReceived', to), 0) + openingReceivableAsOf - openingReceivedAsOf;
 
         const overview = [
             { Metric: 'Period', Value: from + ' to ' + to },

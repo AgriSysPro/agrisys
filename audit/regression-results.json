@@ -1,0 +1,129 @@
+{
+  "parsedApplicationModules": 25,
+  "parsedVendorModules": 5,
+  "duplicateHtmlIds": [],
+  "undefinedHtmlHandlers": [],
+  "missingLocalScripts": [],
+  "reproductions": [
+    {
+      "name": "General farmer payment is double counted and deletion leaves second invoice paid",
+      "status": "PASS"
+    },
+    {
+      "name": "General buyer receipt is double counted and deletion leaves second invoice received",
+      "status": "PASS"
+    },
+    {
+      "name": "Historical reports treat a future payment as an initial payment",
+      "status": "PASS"
+    },
+    {
+      "name": "Season carry-forward doubles report inventory",
+      "status": "PASS"
+    },
+    {
+      "name": "Season carry-forward loses opening stock and stock adjustments",
+      "status": "PASS"
+    },
+    {
+      "name": "FIFO consumes a purchase dated after the sale",
+      "status": "PASS"
+    },
+    {
+      "name": "Crop case normalization is undone by report COGS lookup",
+      "status": "PASS"
+    },
+    {
+      "name": "Zero net payable falls back to gross amount",
+      "status": "PASS"
+    },
+    {
+      "name": "Deleting initial bank payment deletes the purchase but leaves stock and later payments",
+      "status": "PASS"
+    },
+    {
+      "name": "Clear all data leaves stock and party caches intact",
+      "status": "PASS"
+    },
+    {
+      "name": "Migration ignores actual stock adjustment schema",
+      "status": "PASS"
+    },
+    {
+      "name": "Buyer deposit is deducted twice from buyer balance",
+      "status": "PASS"
+    },
+    {
+      "name": "Cash flow treats advance settlement as cash receipt",
+      "status": "PASS"
+    },
+    {
+      "name": "Partner profit excludes stock adjustment cost",
+      "status": "PASS"
+    },
+    {
+      "name": "Renaming farmer disconnects existing purchase ledger",
+      "status": "PASS"
+    },
+    {
+      "name": "Buyer general payment input invokes the farmer handler",
+      "status": "PASS"
+    },
+    {
+      "name": "Editing farmer payment offers already adjusted advance twice",
+      "status": "PASS"
+    },
+    {
+      "name": "Purchase edit accepts a cumulative paid amount below existing linked payments",
+      "status": "PASS"
+    },
+    {
+      "name": "Older backup restore leaves later stores and both materialized caches untouched",
+      "status": "PASS"
+    },
+    {
+      "name": "Farmer overpayment posts cash twice in bookkeeping",
+      "status": "PASS"
+    },
+    {
+      "name": "Partner transaction commits then crashes on nonexistent closeModal",
+      "status": "PASS"
+    },
+    {
+      "name": "General payment edit reallocates and replaces cash exactly once",
+      "status": "PASS"
+    },
+    {
+      "name": "Legacy bank linkage reverses on payment edit and deletion",
+      "status": "PASS"
+    },
+    {
+      "name": "Partial buyer deposit remains available and buyer totals agree",
+      "status": "PASS"
+    },
+    {
+      "name": "Cashless deposit deletion leaves cached buyer balance correct",
+      "status": "PASS"
+    },
+    {
+      "name": "Farmer overpayment creates one cash transaction and a balanced journal",
+      "status": "PASS"
+    },
+    {
+      "name": "Reject invalid advances, excess buyer receipts, and ambiguous legacy allocations",
+      "status": "PASS"
+    },
+    {
+      "name": "Backdated stock validation excludes future purchases",
+      "status": "PASS"
+    },
+    {
+      "name": "Historic legacy payment reconstruction keeps future events separate",
+      "status": "PASS"
+    },
+    {
+      "name": "Party rename updates payments, advances, and openings atomically and rejects duplicates",
+      "status": "PASS"
+    }
+  ]
+}

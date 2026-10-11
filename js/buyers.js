@@ -20,7 +20,7 @@ const Buyers = {
         const sales = untilDate ? allSales.filter(s => s.date <= untilDate) : allSales;
 
         const allSalePayments = await DB.getAll('sale_payments');
-        const salePayments = untilDate ? allSalePayments.filter(p => p.date <= untilDate) : allSalePayments;
+        const salePayments = allSalePayments;
 
         const allOpenings = await DB.getAll('opening_balances');
         const openings = untilDate ? allOpenings.filter(o => o.date <= untilDate) : allOpenings;
@@ -42,7 +42,8 @@ const Buyers = {
             
             const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
             const totalRcvd = openingReceived + bs.reduce((s, x) => s + Utils.paymentTotalFor(x, salePayments, 'saleId', 'amountReceived', untilDate), 0);
-            const balance = totalAmt - totalRcvd - openingAdvance;
+            const appliedDeposit = salePayments.filter(p => (!untilDate || p.date <= untilDate) && (p.buyerName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+            const balance = totalAmt - totalRcvd - Math.max(0, openingAdvance - appliedDeposit);
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(b.name, search)}</td>
                 <td>${Utils.highlightText(b.phone || '-', search)}</td>
@@ -93,7 +94,10 @@ const Buyers = {
             notes: document.getElementById('bm-notes').value.trim(),
             createdAt: new Date().toISOString()
         };
-        await DB.put('buyers', data);
+        let renameOps;
+        try { renameOps = await Utils.renamePartyOps('buyer', editId, name); } catch (e) { Utils.showToast(e.message, 'error'); return; }
+        await DB.commitUnitOfWork([...renameOps, { storeName: 'buyers', action: 'put', data }]);
+        await CoreServices.runMaterializedViewMigrations();
         Utils.hideModal('buyer-modal');
         Utils.showToast('Buyer saved!');
         this.render();

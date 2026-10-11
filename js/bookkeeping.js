@@ -40,7 +40,8 @@ const Bookkeeping = {
 
     async generateEntries(from, to) {
         const activeSeason = await Utils.getActiveSeason();
-        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const allPurchases = (await DB.getAll('purchases')).filter(p => p.type !== 'opening_balance');
+        const purchases = Utils.filterBySeason(allPurchases, activeSeason);
         const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
         const pPayments = Utils.filterBySeason(await DB.getAll('purchase_payments'), activeSeason);
         const sPayments = Utils.filterBySeason(await DB.getAll('sale_payments'), activeSeason);
@@ -151,7 +152,7 @@ const Bookkeeping = {
                 entries.push({ date: p.date, description: `Other deductions for purchase #${p.id}`, account: 'Other Income', debit: 0, credit: otherDeds, type: 'deduction' });
             }
             const laterPayments = pPayments.filter(pay => pay.purchaseId === p.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-            const initialPaid = p.initialPaymentAmount !== undefined ? p.initialPaymentAmount : Math.max(0, (p.amountPaid || 0) - laterPayments);
+            const initialPaid = Utils.initialPaymentFor(p, pPayments, 'purchaseId', 'amountPaid');
             if (initialPaid > 0) {
                 entries.push({ date: p.date, description: `Initial payment to: ${p.farmerName} (#${p.id})`, account: 'Accounts Payable (Farmer)', debit: initialPaid, credit: 0, type: 'payment' });
                 entries.push({ date: p.date, description: `Initial payment to: ${p.farmerName} (#${p.id})`, account: 'Cash / Bank', debit: 0, credit: initialPaid, type: 'payment' });
@@ -159,7 +160,10 @@ const Bookkeeping = {
         });
 
         // Calculate inventory lots to get COGS per sale
-        const inventoryMetrics = Utils.calculateInventoryLots(purchases, sales, expenses);
+        const costingCutoff = to || activeSeason?.endDate || '';
+        const asOf = rows => rows.filter(r => !costingCutoff || r.date <= costingCutoff);
+        const inventoryEvents = Utils.applyStockAdjustments(asOf(allPurchases), asOf(await DB.getAll('sales')), asOf(await DB.getAll('stock_adjustments')));
+        const inventoryMetrics = Utils.calculateInventoryLots(inventoryEvents.purchases, inventoryEvents.sales, asOf(await DB.getAll('expenses')));
         const saleCogsMap = {};
         Object.values(inventoryMetrics).forEach(lots => {
             if (lots.saleCogs) {
@@ -179,7 +183,7 @@ const Bookkeeping = {
             }
 
             const laterReceipts = sPayments.filter(pay => pay.saleId === s.id).reduce((sum, pay) => sum + (pay.amount || 0), 0);
-            const initialReceived = s.initialReceiptAmount !== undefined ? s.initialReceiptAmount : Math.max(0, (s.amountReceived || 0) - laterReceipts);
+            const initialReceived = Utils.initialPaymentFor(s, sPayments, 'saleId', 'amountReceived');
             if (initialReceived > 0) {
                 entries.push({ date: s.date, description: `Initial receipt from: ${s.buyerName} (#${s.id})`, account: 'Cash / Bank', debit: initialReceived, credit: 0, type: 'receipt' });
                 entries.push({ date: s.date, description: `Initial receipt from: ${s.buyerName} (#${s.id})`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: initialReceived, type: 'receipt' });
@@ -189,6 +193,7 @@ const Bookkeeping = {
         // ── Purchase payment entries ──
         pPayments.forEach(p => {
             const totalPay = p.amount || 0;
+            if (p.excessAdvance > 0) entries.push({ date: p.date, description: `Excess farmer payment: ${p.farmerName}`, account: 'Advances to Farmers', debit: p.excessAdvance, credit: 0, type: 'advance' });
             const advDeduct = p.advanceDeducted || 0;
             const netCash = p.netCashAmount !== undefined ? p.netCashAmount : Math.max(0, totalPay - advDeduct);
 
@@ -211,13 +216,13 @@ const Bookkeeping = {
                 entries.push({ date: p.date, description: `Received from: ${p.buyerName} (#${p.saleId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Cash / Bank', debit: netCash, credit: 0, type: 'receipt' });
             }
             if (advDeduct > 0) {
-                entries.push({ date: p.date, description: `Buyer deposit applied: ${p.buyerName}`, account: 'Buyer Advances / Deposits', debit: advDeduct, credit: 0, type: 'receipt' });
+                entries.push({ date: p.date, description: `Buyer deposit applied: ${p.buyerName}`, account: 'Advances from Buyers', debit: advDeduct, credit: 0, type: 'receipt' });
             }
             entries.push({ date: p.date, description: `Received from: ${p.buyerName} (#${p.saleId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Receivable (Buyer)', debit: 0, credit: totalRcvd, type: 'receipt' });
         });
 
         // ── Expense entries ──
-        advances.filter(a => (a.amount || 0) > 0).forEach(a => {
+        advances.filter(a => (a.amount || 0) > 0 && a.sourceStore !== 'purchase_payments').forEach(a => {
             entries.push({ date: a.date, description: `Advance paid to farmer: ${a.farmerName}`, account: 'Advances to Farmers', debit: a.amount, credit: 0, type: 'advance' });
             entries.push({ date: a.date, description: `Advance paid to farmer: ${a.farmerName}`, account: 'Cash / Bank', debit: 0, credit: a.amount, type: 'advance' });
         });
@@ -242,7 +247,7 @@ const Bookkeeping = {
         // ── Stock Adjustment entries ──
         const stockAdjustments = Utils.filterBySeason(await DB.getAll('stock_adjustments'), activeSeason);
         stockAdjustments.filter(a => a.direction !== 'opening').forEach(a => {
-            const adjVal = a.value || 0;
+            const adjVal = a.direction === 'decrease' ? (saleCogsMap[a.id] || 0) : (a.value || 0);
             if (a.direction === 'decrease') {
                 entries.push({ date: a.date, description: `Stock shortage/loss: ${a.crop} (${a.weight} KG) - ${a.reason || 'Shortage'}`, account: 'Stock Shortage Loss', debit: adjVal, credit: 0, type: 'stock_adjustment' });
                 entries.push({ date: a.date, description: `Stock shortage/loss: ${a.crop} (${a.weight} KG) - ${a.reason || 'Shortage'}`, account: 'Inventory / Purchases', debit: 0, credit: adjVal, type: 'stock_adjustment' });
@@ -255,8 +260,9 @@ const Bookkeeping = {
         // ── Manual Journal Entries ──
         const journalEntries = await DB.getAll('journal_entries') || [];
         journalEntries.forEach(j => {
-            entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: j.debitAccount, debit: j.amount, credit: 0, type: 'journal' });
-            entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: j.creditAccount, debit: 0, credit: j.amount, type: 'journal' });
+            const canonical = name => name === 'Cost of Goods Sold (COGS)' ? 'Cost of Goods Sold' : name.startsWith('Bank/Cash: ') ? 'Cash / Bank' : name;
+            entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: canonical(j.debitAccount), debit: j.amount, credit: 0, type: 'journal' });
+            entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: canonical(j.creditAccount), debit: 0, credit: j.amount, type: 'journal' });
         });
 
         // Filter by date range
@@ -395,20 +401,14 @@ const Bookkeeping = {
 // ===== Manual Journal Entry Module =====
 const Journal = {
     accounts: [
-        'Cash / Bank',
-        'Accounts Payable (Farmer)',
-        'Accounts Receivable (Buyer)',
-        'Inventory / Purchases',
         'Cost of Goods Sold (COGS)',
         'Sales Revenue',
         'Operating Expenses',
-        'Advances to Farmers',
-        'Debts / Loans Receivable',
         'Owner Capital',
         'Owner Drawings',
-        'Partner Capital',
-        'Partner Drawings / Profit Payouts',
         'Opening Equity',
+        'Mandi Tax Payable',
+        'Commission Revenue',
         'Other Income'
     ],
 
@@ -431,7 +431,7 @@ const Journal = {
             capAccounts.forEach(c => {
                 const name = `Bank/Cash: ${c.name}`;
                 if(!this.accounts.includes(name)) {
-                    sel.insertAdjacentHTML('beforeend', `<option value="${name}">${name}</option>`);
+                    sel.insertAdjacentHTML('beforeend', `<option value="cash:${Utils.escapeHTML(c.id)}">${Utils.escapeHTML(name)}</option>`);
                 }
             });
         };
@@ -443,13 +443,14 @@ const Journal = {
     },
 
     async save() {
+        const snapshot = await DB.financialSnapshot();
         const date = document.getElementById('jv-date').value;
         const desc = document.getElementById('jv-desc').value.trim();
         const dr = document.getElementById('jv-dr').value;
         const cr = document.getElementById('jv-cr').value;
         const amt = parseFloat(document.getElementById('jv-amt').value) || 0;
 
-        if (!date || !dr || !cr || amt <= 0) {
+        if (!date || !dr || !cr || !Number.isFinite(amt) || amt <= 0) {
             Utils.showToast('Please fill all fields and enter a valid amount', 'error');
             return;
         }
@@ -459,17 +460,34 @@ const Journal = {
             return;
         }
 
+        const accounts = await DB.getAll('capital_accounts');
+        const resolve = value => value.startsWith('cash:') ? accounts.find(a => a.id === value.slice(5)) : null;
+        const drCash = resolve(dr), crCash = resolve(cr);
+        if ((!drCash && !this.accounts.includes(dr)) || (!crCash && !this.accounts.includes(cr))) {
+            Utils.showToast('Use the originating transaction screen for party, inventory, or partner control accounts. Select a specific cash/bank account for cash postings.', 'error'); return;
+        }
         const entry = {
-            id: 'JV-' + Date.now(),
+            id: 'JV-' + Utils.generateId(),
             date,
             description: desc,
-            debitAccount: dr,
-            creditAccount: cr,
-            amount: amt,
+            debitAccount: drCash ? 'Cash / Bank' : dr,
+            creditAccount: crCash ? 'Cash / Bank' : cr,
+            debitAccountId: drCash?.id || null,
+            creditAccountId: crCash?.id || null,
+            cashPosted: true,
+            amount: Utils.roundCurrency(amt),
             created_at: new Date().toISOString()
         };
 
-        await DB.add('journal_entries', entry);
+        const ops = [{ storeName: 'journal_entries', action: 'add', data: entry }];
+        for (const [account, type] of [[drCash, 'deposit'], [crCash, 'withdrawal']]) {
+            if (account) ops.push({ storeName: 'capital_transactions', action: 'add', data: {
+                id: Utils.generateId(), date, accountId: account.id, type, amount: entry.amount,
+                sourceStore: 'journal_entries', sourceId: entry.id, description: `Journal: ${desc}`, createdAt: new Date().toISOString()
+            } });
+        }
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.message, 'error'); return; }
         Utils.hideModal('journal-modal');
         Utils.showToast('Journal Entry saved!');
         

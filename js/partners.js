@@ -11,16 +11,18 @@ const PartnersMgmt = {
     // ── Calculate Business Net Profit (Retained Earnings before partner distributions) ──
     async getBusinessNetProfit() {
         const activeSeason = await Utils.getActiveSeason();
-        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
-        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
-        const expenses = Utils.filterBySeason(await DB.getAll('expenses'), activeSeason);
+        const scoped = await Reports.getScopedData('', activeSeason?.endDate || '');
+        const purchases = Utils.filterBySeason(scoped.purchases, activeSeason);
+        const sales = Utils.filterBySeason(scoped.sales, activeSeason);
+        const expenses = Utils.filterBySeason(scoped.expenses, activeSeason);
+        const adjusted = { purchases: scoped.purchases, sales };
         const operatingExpenses = expenses.filter(e => !e.purchaseId);
 
-        const actualSales = sales.filter(s => s.type !== 'stock_adjustment');
-        const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
+        const actualSales = adjusted.sales.filter(s => s.type !== 'stock_adjustment');
+        const virtualSales = adjusted.sales.filter(s => s.type === 'stock_adjustment');
         const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
         const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
-        const inventoryMetrics = Utils.calculateInventoryLots(purchases, sales, expenses);
+        const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases, scoped.sales, scoped.expenses.filter(e => !activeSeason || e.date <= activeSeason.endDate));
 
         let cogs = 0;
         let invLoss = 0;
@@ -35,7 +37,7 @@ const PartnersMgmt = {
             }, 0);
         }
         const opExp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-        return (salesRev + commRev) - cogs - invLoss - opExp;
+        return (salesRev + commRev) - cogs - invLoss - opExp + Reports.manualProfit(scoped, activeSeason?.startDate || '', activeSeason?.endDate || '');
     },
 
     // ── Partners Summary Helper ──
@@ -299,7 +301,7 @@ const PartnersMgmt = {
             createdAt: existing ? existing.createdAt : new Date().toISOString()
         });
 
-        Utils.closeModal('partner-modal');
+        Utils.hideModal('partner-modal');
         Utils.showToast(existing ? 'Partner profile updated!' : 'New partner added!');
         await this.render();
     },
@@ -429,7 +431,7 @@ const PartnersMgmt = {
             await Bookkeeping.recordPartnerTx(record, partner);
         }
 
-        Utils.closeModal('partner-tx-modal');
+        Utils.hideModal('partner-tx-modal');
         Utils.showToast('Partner transaction saved and synchronized!');
         await this.render();
     },

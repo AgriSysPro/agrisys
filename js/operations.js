@@ -88,6 +88,7 @@ const OpeningBalances = {
     },
 
     async save() {
+        const snapshot = await DB.financialSnapshot();
         const type = document.getElementById('ob-type').value;
         const amount = Utils.pf(document.getElementById('ob-amount').value);
         const weight = Utils.pf(document.getElementById('ob-weight').value);
@@ -195,7 +196,11 @@ const OpeningBalances = {
             }
         }
 
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await Utils.validateAdvanceHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         Utils.hideModal('opening-balance-modal');
         Utils.showToast('Opening balance saved!');
         this.render();
@@ -293,6 +298,7 @@ const OpeningBalances = {
     },
 
     async delete(id) {
+        const snapshot = await DB.financialSnapshot();
         const b = await DB.get('opening_balances', id);
         if (!b) return;
         const linkedPayments = (await DB.getAll('opening_balance_payments')).filter(p => p.openingBalanceId === id);
@@ -354,7 +360,11 @@ const OpeningBalances = {
             }
         }
 
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await Utils.validateAdvanceHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         Utils.showToast('Opening balance deleted!');
         this.render();
     }
@@ -535,6 +545,7 @@ const StockAdjustments = {
     },
 
     async save() {
+        const snapshot = await DB.financialSnapshot();
         const data = {
             id: Utils.generateId(),
             date: document.getElementById('sa-date').value,
@@ -566,13 +577,18 @@ const StockAdjustments = {
             if (op) ops.push(op);
         }
 
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await Utils.validateAdvanceHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         Utils.hideModal('stock-adjustment-modal');
         Utils.showToast('Stock adjustment saved!');
         await this.syncAll();
     },
 
     async delete(id) {
+        const snapshot = await DB.financialSnapshot();
         const adj = await DB.get('stock_adjustments', id);
         if (!adj) return;
         const linkedOpening = await DB.get('opening_balances', id);
@@ -587,7 +603,11 @@ const StockAdjustments = {
             if (op) ops.push(op);
         }
         
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await Utils.validateAdvanceHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         await Utils.audit('delete', 'stock_adjustment', id, { oldRecord: adj, oldAmount: adj.value || 0 });
         Utils.showToast('Stock adjustment deleted!');
         await this.syncAll();
@@ -629,7 +649,7 @@ const InventoryLots = {
                 let remaining = s.netWeight || 0;
                 const sCropLower = s.crop.trim().toLowerCase();
                 lots.filter(l => l.crop && l.crop.trim().toLowerCase() === sCropLower).forEach(lot => {
-                    if (remaining <= 0) return;
+                    if (remaining <= 0 || lot.date > s.date) return;
                     const used = Math.min(lot.remainingWeight, remaining);
                     lot.remainingWeight -= used;
                     remaining -= used;
@@ -694,7 +714,7 @@ const AgingReports = {
         const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
         const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
         const farmerRows = purchases.map(p => {
-            const balance = (p.netPayableAmount || p.amount || 0) - (p.amountPaid || 0);
+            const balance = ((p.netPayableAmount ?? p.amount ?? 0)) - (p.amountPaid || 0);
             return { party: p.farmerName, source: p.id, date: p.dueDate || p.date, balance, type: 'farmer' };
         }).concat(openings.filter(o => o.type === 'farmer_payable').map(o => ({ party: o.partyName, source: 'Opening Balance', date: o.date, balance: Math.max(0, (o.amount || 0) - (o.paidAmount || o.settledAmount || 0)), type: 'farmer' })))
             .filter(r => r.balance > 0);
@@ -770,7 +790,7 @@ const FinanceReports = {
         const from = document.getElementById('cb-from').value;
         const to = document.getElementById('cb-to').value;
         const accounts = await DB.getAll('capital_accounts');
-        const txs = (await DB.getAll('capital_transactions')).filter(t => !accountId || t.accountId === accountId);
+        const txs = [...await DB.getAll('capital_transactions'), ...await Utils.journalCashTransactions()].filter(t => !accountId || t.accountId === accountId);
         const accountMap = Object.fromEntries(accounts.map(a => [a.id, a]));
         const opening = accounts
             .filter(a => !accountId || a.id === accountId)
@@ -796,7 +816,7 @@ const FinanceReports = {
             allRows.push({
                 id: t.id,
                 date: t.date,
-                account: accountMap[t.accountId]?.name || 'Unknown',
+                account: accountMap[t.accountId]?.name || 'Unallocated journal cash',
                 description: t.description || '-',
                 deposit: t.type === 'deposit' ? t.amount || 0 : 0,
                 withdrawal: t.type === 'withdrawal' ? t.amount || 0 : 0,

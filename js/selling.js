@@ -132,7 +132,7 @@ const Selling = {
 
     async syncInitialReceiptTx(data) {
         await Utils.deleteLinkedCapitalTx('sales', data.id);
-        const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', data.id);
+        const linkedReceipts = await Utils.getInvoicePayments('sale_payments', 'saleId', data.id);
         const laterReceipts = Utils.sumBy(linkedReceipts, 'amount');
         const initialReceived = Math.max(0, (data.amountReceived || 0) - laterReceipts);
         data.initialReceiptAmount = initialReceived;
@@ -152,7 +152,7 @@ const Selling = {
         await DB.put('sales', data);
     },
 
-    async getAvailableStock(crop, excludeSaleId = null) {
+    async getAvailableStock(crop, excludeSaleId = null, asOfDate = null) {
         let purchases = await DB.getAll('purchases');
         let sales = await DB.getAll('sales');
         let adjustments = await DB.getAll('stock_adjustments');
@@ -160,6 +160,7 @@ const Selling = {
         purchases = Utils.filterBySeason(purchases, activeSeason);
         sales = Utils.filterBySeason(sales, activeSeason);
         adjustments = Utils.filterBySeason(adjustments, activeSeason);
+        if (asOfDate) { purchases = purchases.filter(p => p.date <= asOfDate); sales = sales.filter(s => s.date <= asOfDate); adjustments = adjustments.filter(a => a.date <= asOfDate); }
         const adjusted = Utils.applyStockAdjustments(purchases, sales, adjustments);
         
         const cropLower = (crop || '').trim().toLowerCase();
@@ -182,8 +183,9 @@ const Selling = {
         const linkedCap = capTxs.filter(t => t.sourceStore === 'sales' && t.sourceId === d.id);
         linkedCap.forEach(t => ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id }));
 
-        const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', d.id);
-        const laterReceived = Utils.sumBy(linkedReceipts, 'amount');
+        const linkedReceipts = await Utils.getInvoicePayments('sale_payments', 'saleId', d.id);
+        const laterReceived = (await DB.getAll('sale_payments')).reduce((s, p) => s + Utils.paymentAllocatedTo(p, d.id, 'saleId'), 0);
+        if (d.amountReceived + 0.01 < laterReceived) { Utils.showToast('Received total cannot be lower than recorded receipts', 'error'); return; }
         const initialReceived = Math.max(0, (d.amountReceived || 0) - laterReceived);
         d.initialReceiptAmount = initialReceived;
         d.initialCapitalTxId = null;
@@ -210,7 +212,7 @@ const Selling = {
         }
 
         // 2. Sale record
-        ops.push({ storeName: 'sales', action: 'put', data: d });
+        ops.push({ storeName: 'sales', action: existing ? 'put' : 'add', data: d });
 
         // 3. Buyer record
         const buyerName = (d.buyerName || '').trim();
@@ -279,6 +281,18 @@ const Selling = {
     },
 
     async save() {
+        if (this.saving) return;
+        this.saving = true;
+        try {
+            return await Utils.withReceiptSaveLock('sale', () => this.saveReceipt());
+        } finally {
+            this.saving = false;
+        }
+    },
+
+    async saveReceipt() {
+        const snapshot = await DB.financialSnapshot();
+        if (!this.editingId) document.getElementById('s-id').value = await Utils.getNextReceiptId('sale');
         const d = this.getData();
         if (!d.buyerName) { Utils.showToast('Buyer name required', 'error'); return; }
         if (!d.crop) { Utils.showToast('Crop required', 'error'); return; }
@@ -286,18 +300,19 @@ const Selling = {
         if (d.rate <= 0) { Utils.showToast('Rate must be greater than 0', 'error'); return; }
         if (d.amountReceived < 0) { Utils.showToast('Received amount cannot be negative', 'error'); return; }
         if (d.amountReceived > d.amount) { Utils.showToast('Received amount cannot exceed sale amount', 'error'); return; }
-        const linkedReceipts = await DB.getByIndex('sale_payments', 'saleId', d.id);
+        const linkedReceipts = await Utils.getInvoicePayments('sale_payments', 'saleId', d.id);
         const laterReceived = Utils.sumBy(linkedReceipts, 'amount');
+        if (d.amountReceived + 0.01 < laterReceived) { Utils.showToast('Received total cannot be lower than recorded receipts', 'error'); return; }
         const initialReceived = Math.max(0, (d.amountReceived || 0) - laterReceived);
         if (initialReceived > 0 && !d.initialReceiptAccountId) { Utils.showToast('Select cash/bank account for initial receipt', 'error'); return; }
-        const available = await this.getAvailableStock(d.crop, this.editingId || d.id);
+        const available = await this.getAvailableStock(d.crop, this.editingId || d.id, d.date);
         if (d.netWeight > available) {
             Utils.showToast(`Cannot sell ${Utils.formatNum(d.netWeight, 2)} KG. Available ${d.crop} stock is ${Utils.formatNum(Math.max(0, available), 2)} KG.`, 'error');
             return;
         }
-        const existing = await DB.get('sales', d.id);
+        const existing = this.editingId ? await DB.get('sales', d.id) : null;
         if (existing) {
-            const payments = await DB.getByIndex('sale_payments', 'saleId', d.id);
+            const payments = await Utils.getInvoicePayments('sale_payments', 'saleId', d.id);
             const oldAmount = existing.amount || 0;
             const newAmount = d.amount || 0;
             if (payments.length && Math.abs(oldAmount - newAmount) > 0.01) {
@@ -309,11 +324,14 @@ const Selling = {
         }
 
         const ops = await this.buildUnitOfWorkOperations(d, existing);
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         await Utils.confirmReceiptId('sale', d.id);
 
         Utils.showToast('Sale receipt saved!');
-        this.clearForm();
+        await this.clearForm();
         if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();
         return d;
     },
@@ -353,7 +371,7 @@ const Selling = {
     async loadForEdit(id) {
         const data = await DB.get('sales', id);
         if (!data) return;
-        const payments = await DB.getByIndex('sale_payments', 'saleId', id);
+        const payments = await Utils.getInvoicePayments('sale_payments', 'saleId', id);
         if (payments.length) {
             const ok = await Utils.confirm(`This sale has ${payments.length} linked receipt(s). Editing weight, rate, deductions, or received amount can change balances. Continue?`);
             if (!ok) return;
@@ -419,16 +437,18 @@ const SaleList = {
         Utils.renderPagination('sale-pagination', this.currentPage, totalPages, 'SaleList.render');
     },
     async delete(id) {
+        const snapshot = await DB.financialSnapshot();
         const sale = await DB.get('sales', id);
         if (!sale) return;
-        const payments = await DB.getByIndex('sale_payments', 'saleId', id);
+        const payments = await Utils.getInvoicePayments('sale_payments', 'saleId', id);
+        if (payments.some(p => (p.allocations || []).length > 1 || (!p.allocations && /General .*receipt/i.test(p.notes || '')))) { Utils.showToast('Reverse the general receipt before deleting an invoice it settles.', 'error'); return; }
         const paymentTotal = Utils.sumBy(payments, 'amount');
         const msg = `Delete sale ${id}?\n\nLinked buyer receipts: ${payments.length} (PKR ${Utils.formatPKR(paymentTotal)})\nLinked capital transactions for those receipts will also be removed.`;
         if (!await Utils.confirm(msg)) return;
         const ops = [];
         const allCapTxs = await DB.getAll('capital_transactions');
         for (const p of payments) {
-            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'sale_payments' && t.sourceId === p.id);
+            const linkedCap = allCapTxs.filter(t => Utils.isLinkedCapitalTx(t, 'sale_payments', p.id, p.capitalTxId));
             for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
             ops.push({ storeName: 'sale_payments', action: 'delete', key: p.id, softDelete: true, data: p });
         }
@@ -455,7 +475,8 @@ const SaleList = {
 
         ops.push({ storeName: 'sales', action: 'delete', key: id, softDelete: true, data: sale });
 
-        await DB.commitUnitOfWork(ops);
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.message, 'error'); return; }
         Utils.showToast('Deleted!');
         this.render();
         if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();

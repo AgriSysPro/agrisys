@@ -336,10 +336,15 @@ const DB = {
         });
     },
 
-    // Commit a list of operations synchronously within a single atomic IDB transaction
-    async commitUnitOfWork(operations) {
+    // Capture source records for optimistic validation inside the eventual write transaction.
+    async financialSnapshot() {
+        const names = ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'stock_adjustments', 'capital_accounts', 'capital_transactions', 'journal_entries', 'capital_entries', 'partner_transactions', 'company_debts', 'expenses', 'opening_balance_payments'];
+        return Object.fromEntries(await Promise.all(names.map(async name => [name, await this.getAll(name)])));
+    },
+
+    async commitUnitOfWork(operations, expected = null) {
         if (!operations || !operations.length) return true;
-        const storeNames = [...new Set(operations.map(op => op.storeName))];
+        const storeNames = [...new Set([...operations.map(op => op.storeName), ...Object.keys(expected || {})])];
 
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction(storeNames, 'readwrite');
@@ -350,19 +355,33 @@ const DB = {
             tx.onerror = (e) => reject(e.target.error);
             tx.onabort = () => reject(new Error('Unit of work transaction aborted'));
 
-            for (const op of operations) {
-                const store = tx.objectStore(op.storeName);
-                if (op.action === 'put') {
-                    store.put(op.data);
-                } else if (op.action === 'delete') {
-                    if (op.softDelete) {
-                        op.data.isDeleted = true;
-                        op.data.deletedAt = new Date().toISOString();
-                        store.put(op.data);
-                    } else {
-                        store.delete(op.key);
+            const write = () => {
+                try {
+                    for (const op of operations) {
+                        const store = tx.objectStore(op.storeName);
+                        if (op.action === 'put') store.put(op.data);
+                        else if (op.action === 'add') store.add(op.data);
+                        else if (op.action === 'delete') {
+                            if (op.softDelete) store.put({ ...op.data, isDeleted: true, deletedAt: new Date().toISOString() });
+                            else store.delete(op.key);
+                        }
                     }
-                }
+                } catch (error) { tx.abort(); reject(error); }
+            };
+            if (!expected) { write(); return; }
+            let pending = Object.keys(expected).length;
+            if (!pending) { write(); return; }
+            for (const [name, rows] of Object.entries(expected)) {
+                const request = tx.objectStore(name).getAll();
+                request.onsuccess = () => {
+                    const current = request.result.filter(r => !r.isDeleted);
+                    if (JSON.stringify(current) !== JSON.stringify(rows)) {
+                        const error = new Error('Records changed in another operation. Please retry.');
+                        error.code = 'CONFLICT';
+                        reject(error); tx.abort(); return;
+                    }
+                    if (--pending === 0) write();
+                };
             }
         });
     },
@@ -412,37 +431,38 @@ const DB = {
 
     // Restore all data atomically with pre-validation
     async importAll(data) {
-        if (!data || typeof data !== 'object') {
-            throw new Error('Invalid backup file payload');
-        }
-
+        if (!data || !Number.isInteger(data._version) || data._version < 1 || data._version > this.DB_VERSION) throw new Error('Unsupported backup version');
         const stores = ['settings', 'purchases', 'farmers', 'purchase_payments', 'sales', 'sale_payments', 'expenses', 'capital_accounts', 'capital_transactions', 'capital_entries', 'company_debts', 'partners', 'partner_transactions', 'buyers', 'farmer_advances', 'deductions', 'journal_entries', 'seasons', 'audit_logs', 'opening_balances', 'stock_adjustments', 'opening_balance_payments', 'commissions', 'retained_earnings'];
-        
-        // Validate store structures before clearing
-        for (const s of stores) {
-            if (data[s] && !Array.isArray(data[s])) {
-                throw new Error(`Invalid data array format for store: ${s}`);
+        const introduced = { buyers: 2, farmer_advances: 3, seasons: 4, audit_logs: 5,
+            opening_balances: 6, stock_adjustments: 6, deductions: 7, opening_balance_payments: 7,
+            journal_entries: 8, commissions: 9, retained_earnings: 9, capital_entries: 11,
+            company_debts: 12, partners: 13, partner_transactions: 13 };
+        const required = stores.filter(store => (introduced[store] || 1) <= data._version);
+        if (required.some(s => !Array.isArray(data[s]))) throw new Error('Incomplete backup: required data stores are missing');
+        for (const store of stores) {
+            if (data[store] !== undefined && !Array.isArray(data[store])) throw new Error('Invalid data array: ' + store);
+            const key = store === 'settings' ? 'key' : store === 'retained_earnings' ? 'seasonId' : 'id';
+            const seen = new Set();
+            for (const record of data[store] || []) {
+                if (!record || !['string', 'number'].includes(typeof record[key]) || record[key] === '' || seen.has(record[key])) throw new Error('Invalid or duplicate record key in ' + store);
+                seen.add(record[key]);
             }
         }
-
-        // Atomic multi-store restore
-        return new Promise((resolve, reject) => {
-            const activeStores = stores.filter(s => Array.isArray(data[s]));
-            if (!activeStores.length) return resolve(false);
-
+        const activeStores = [...stores, 'warehouse_stock', 'party_running_balances'];
+        await new Promise((resolve, reject) => {
             const tx = this.db.transaction(activeStores, 'readwrite');
-            tx.oncomplete = () => {
-                this.broadcastUpdate(activeStores);
-                resolve(true);
-            };
-            tx.onerror = (e) => reject(new Error('Atomic import failed and was rolled back: ' + e.target.error));
-
-            activeStores.forEach(s => {
-                const store = tx.objectStore(s);
-                store.clear();
-                data[s].forEach(record => store.put(record));
-            });
+            tx.oncomplete = () => { this.broadcastUpdate(activeStores); resolve(true); };
+            tx.onerror = () => reject(new Error('Restore failed; transaction rolled back'));
+            tx.onabort = () => reject(new Error('Restore aborted; transaction rolled back'));
+            try {
+                for (const name of activeStores) {
+                    const store = tx.objectStore(name);
+                    store.clear();
+                    for (const record of data[name] || []) store.put(record);
+                }
+            } catch (error) { tx.abort(); reject(error); }
         });
+        // Derived views are rebuilt on the reload that every restore flow performs.
+        return true;
     }
 };
-

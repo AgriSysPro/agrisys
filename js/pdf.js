@@ -342,7 +342,7 @@ const ReceiptPDF = {
         y += 5;
 
         // ═══ NET PAYABLE ═══
-        const totalPayable = data.netPayableAmount || data.amount || 0;
+        const totalPayable = (data.netPayableAmount ?? data.amount ?? 0);
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(7.5);
         doc.text('NET PAYABLE AMOUNT', lx + 2, y);

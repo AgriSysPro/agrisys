@@ -1124,14 +1124,14 @@
                 </div>
                 <div class="form-group" style="margin-top:10px;">
                     <label class="form-label">Adjust / Deduct Open Advance (PKR)</label>
-                    <input class="form-input" type="number" id="pay-deduct-advance" step="0.01" value="0" placeholder="0.00" oninput="PurchasePayments.calculateModalTotals ? PurchasePayments.calculateModalTotals() : (SalePayments.calculateModalTotals && SalePayments.calculateModalTotals())">
+                    <input class="form-input" type="number" id="pay-deduct-advance" step="0.01" value="0" placeholder="0.00" oninput="PaymentService.onTotalsInput()">
                     <span class="form-hint">Settles open advance balance against this payment invoice.</span>
                 </div>
             </div>
 
             <div class="form-grid">
                 <div class="form-group"><label class="form-label">Receipt No</label><input class="form-input" id="pay-receipt-id" readonly></div>
-                <div class="form-group"><label class="form-label">Total Payment Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01" oninput="PurchasePayments.calculateModalTotals ? PurchasePayments.calculateModalTotals() : (SalePayments.calculateModalTotals && SalePayments.calculateModalTotals())"></div>
+                <div class="form-group"><label class="form-label">Total Payment Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01" oninput="PaymentService.onTotalsInput()"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="pay-date"></div>
                 <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="pay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
                 <div class="form-group"><label class="form-label">Reference</label><input class="form-input" id="pay-ref" placeholder="Reference number..."></div>
@@ -1157,7 +1157,7 @@
             <div class="form-grid">
                 <div class="form-group full-width">
                     <label class="form-label" id="dpay-party-label">Select Party <span class="required">*</span></label>
-                    <input class="form-input" id="dpay-party-name" list="dpay-party-datalist" placeholder="Search farmer or buyer..." autocomplete="off" oninput="PurchasePayments.onDirectPartySelect ? PurchasePayments.onDirectPartySelect() : (SalePayments.onDirectPartySelect && SalePayments.onDirectPartySelect())">
+                    <input class="form-input" id="dpay-party-name" list="dpay-party-datalist" placeholder="Search farmer or buyer..." autocomplete="off" oninput="PaymentService.onPartyInput()">
                     <datalist id="dpay-party-datalist"></datalist>
                 </div>
             </div>
@@ -1172,8 +1172,8 @@
 
             <div class="form-grid" style="margin-top:16px;">
                 <div class="form-group"><label class="form-label">Receipt / Voucher No</label><input class="form-input" id="dpay-receipt-id" readonly></div>
-                <div class="form-group"><label class="form-label">Total Payment Amount (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="dpay-amount" step="0.01" placeholder="0.00" oninput="PurchasePayments.calculateDirectTotals ? PurchasePayments.calculateDirectTotals() : (SalePayments.calculateDirectTotals && SalePayments.calculateDirectTotals())"></div>
-                <div class="form-group"><label class="form-label">Adjust Open Advance (PKR)</label><input class="form-input" type="number" id="dpay-deduct-adv" step="0.01" value="0" placeholder="0.00" oninput="PurchasePayments.calculateDirectTotals ? PurchasePayments.calculateDirectTotals() : (SalePayments.calculateDirectTotals && SalePayments.calculateDirectTotals())"></div>
+                <div class="form-group"><label class="form-label">Total Payment Amount (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="dpay-amount" step="0.01" placeholder="0.00" oninput="PaymentService.onTotalsInput(true)"></div>
+                <div class="form-group"><label class="form-label">Adjust Open Advance (PKR)</label><input class="form-input" type="number" id="dpay-deduct-adv" step="0.01" value="0" placeholder="0.00" oninput="PaymentService.onTotalsInput(true)"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="dpay-date"></div>
                 <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="dpay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
                 <div class="form-group"><label class="form-label">Cash / Bank Account</label><select class="form-select" id="dpay-account"></select></div>
@@ -1592,6 +1592,7 @@
 <script src="js/settings.js"></script>
 <script src="js/purchasing.js"></script>
 <script src="js/farmers.js"></script>
+<script src="js/payment-service.js"></script>
 <script src="js/payment-purchase.js"></script>
 <script src="js/selling.js"></script>
 <script src="js/buyers.js"></script>

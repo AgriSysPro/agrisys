@@ -441,6 +441,14 @@ const BankAccounts = {
 
     // ── Delete Account ──
     async deleteAccount(id) {
+        const snapshot = await DB.financialSnapshot();
+        const linked = await DB.getByIndex('capital_transactions', 'accountId', id);
+        const account = await DB.get('capital_accounts', id);
+        const sources = ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'capital_entries', 'partner_transactions', 'company_debts', 'expenses', 'opening_balance_payments', 'journal_entries'];
+        const used = linked.length || (account?.openingBalance || 0) !== 0 || (await Promise.all(sources.map(s => DB.getAll(s)))).flat().some(r =>
+            r.accountId === id || r.initialPaymentAccountId === id || r.initialReceiptAccountId === id || r.debitAccountId === id || r.creditAccountId === id ||
+            (account && (r.debitAccount === `Bank/Cash: ${account.name}` || r.creditAccount === `Bank/Cash: ${account.name}`)));
+        if (used) { Utils.showToast('This account has financial history and cannot be deleted.', 'error'); return; }
         if (!await Utils.confirm('Delete this account and all its transactions?')) return;
         const ops = [];
         const acc = await DB.get('capital_accounts', id);
@@ -456,13 +464,15 @@ const BankAccounts = {
             ops.push({ storeName: 'capital_entries', action: 'put', data: ce });
         }
 
-        await DB.commitUnitOfWork(ops);
+        await DB.commitUnitOfWork(ops, snapshot);
         Utils.showToast('Account deleted!');
         this.render();
     },
 
     // ── Delete Transaction ──
     async deleteTx(id) {
+        const linked = await DB.get('capital_transactions', id);
+        if (linked && (linked.sourceStore || linked.referenceId)) { Utils.showToast('Edit or delete this payment in its originating screen to reverse it safely.', 'warning'); return; }
         if (!await Utils.confirm('Delete this transaction?')) return;
         const ops = [];
         const tx = await DB.get('capital_transactions', id);

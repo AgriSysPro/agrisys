@@ -20,7 +20,7 @@ const Farmers = {
         const purchases = untilDate ? allPurchases.filter(p => p.date <= untilDate) : allPurchases;
 
         const allPurchasePayments = await DB.getAll('purchase_payments');
-        const purchasePayments = untilDate ? allPurchasePayments.filter(p => p.date <= untilDate) : allPurchasePayments;
+        const purchasePayments = allPurchasePayments;
 
         const allAdvances = await DB.getAll('farmer_advances');
         const advances = untilDate ? allAdvances.filter(a => a.date <= untilDate) : allAdvances;
@@ -43,11 +43,11 @@ const Farmers = {
             const openingPaid = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.paidAmount || o.settledAmount || 0), 0);
             const openingAdvance = openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             
-            const totalAmt = openingPayable + fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+            const totalAmt = openingPayable + fp.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
             const totalPaid = openingPaid + fp.reduce((s, p) => s + Utils.paymentTotalFor(p, purchasePayments, 'purchaseId', 'amountPaid', untilDate), 0);
             const givenAdv = advances.filter(a => a.farmerName && a.farmerName.toLowerCase() === f.name.toLowerCase() && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
             const recoveredAdv = fp.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-            const adjustedAdv = purchasePayments.filter(p => p.farmerName && p.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+            const adjustedAdv = purchasePayments.filter(p => (!untilDate || p.date <= untilDate) && p.farmerName && p.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const openAdv = Math.max(0, openingAdvance + givenAdv - recoveredAdv - adjustedAdv);
             const balance = totalAmt - totalPaid;
             return `<tr>
@@ -99,7 +99,10 @@ const Farmers = {
             notes: document.getElementById('fm-notes').value.trim(),
             createdAt: new Date().toISOString()
         };
-        await DB.put('farmers', data);
+        let renameOps;
+        try { renameOps = await Utils.renamePartyOps('farmer', editId, name); } catch (e) { Utils.showToast(e.message, 'error'); return; }
+        await DB.commitUnitOfWork([...renameOps, { storeName: 'farmers', action: 'put', data }]);
+        await CoreServices.runMaterializedViewMigrations();
         Utils.hideModal('farmer-modal');
         Utils.showToast('Farmer saved!');
         this.render();
@@ -206,7 +209,7 @@ const Farmers = {
             const openingPayable = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const openingPaid = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.paidAmount || o.settledAmount || 0), 0);
             const openingAdvance = openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
-            const totalAmt = openingPayable + fp.reduce((s, p) => s + (p.netPayableAmount || p.amount || 0), 0);
+            const totalAmt = openingPayable + fp.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
             const totalPaid = openingPaid + fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
             const givenAdv = advances.filter(a => a.farmerName && a.farmerName.toLowerCase() === f.name.toLowerCase() && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
             const recoveredAdv = fp.reduce((s, p) => s + (p.advanceDeducted || 0), 0);

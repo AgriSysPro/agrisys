@@ -282,7 +282,7 @@ const Purchasing = {
     },
 
     async getAvailableAdvance(farmerName, purchaseId = null) {
-        return await Utils.getFarmerAvailableAdvance(farmerName, { excludePurchaseId: purchaseId });
+        return await Utils.getFarmerAvailableAdvance(farmerName, { excludePurchaseId: purchaseId, season: null });
     },
 
     async validate(data) {
@@ -292,8 +292,9 @@ const Purchasing = {
         if (data.rate <= 0) { Utils.showToast('Rate must be greater than 0', 'error'); return false; }
         if (data.amountPaid < 0) { Utils.showToast('Paid amount cannot be negative', 'error'); return false; }
         if (data.amountPaid > data.netPayableAmount) { Utils.showToast('Paid amount cannot exceed net payable amount', 'error'); return false; }
-        const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
-        const laterPaid = Utils.sumBy(linkedPayments, 'amount');
+        const linkedPayments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', data.id);
+        const laterPaid = (await DB.getAll('purchase_payments')).reduce((s, p) => s + Utils.paymentAllocatedTo(p, data.id, 'purchaseId'), 0);
+        if (data.amountPaid + 0.01 < laterPaid) { Utils.showToast('Paid total cannot be lower than recorded payments', 'error'); return false; }
         const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPaid);
         if (initialPaid > 0 && !data.initialPaymentAccountId) { Utils.showToast('Select cash/bank account for initial payment', 'error'); return false; }
         const availableAdvance = await this.getAvailableAdvance(data.farmerName, data.id);
@@ -312,7 +313,7 @@ const Purchasing = {
 
     async syncInitialPaymentTx(data) {
         await Utils.deleteLinkedCapitalTx('purchases', data.id);
-        const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+        const linkedPayments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', data.id);
         const laterPayments = Utils.sumBy(linkedPayments, 'amount');
         const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPayments);
         data.initialPaymentAmount = initialPaid;
@@ -336,7 +337,7 @@ const Purchasing = {
         const ops = [];
         
         // 1. Purchase record
-        ops.push({ storeName: 'purchases', action: 'put', data });
+        ops.push({ storeName: 'purchases', action: existing ? 'put' : 'add', data });
 
         // 2. Farmer record
         const farmerName = (data.farmerName || '').trim();
@@ -358,7 +359,7 @@ const Purchasing = {
         const linkedCap = capTxs.filter(t => t.sourceStore === 'purchases' && t.sourceId === data.id);
         linkedCap.forEach(t => ops.push({ storeName: 'capital_transactions', action: 'delete', key: t.id }));
         
-        const linkedPayments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
+        const linkedPayments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', data.id);
         const laterPayments = Utils.sumBy(linkedPayments, 'amount');
         const initialPaid = Math.max(0, (data.amountPaid || 0) - laterPayments);
         data.initialPaymentAmount = initialPaid;
@@ -395,8 +396,8 @@ const Purchasing = {
                 entityType: 'purchase',
                 entityId: data.id,
                 details: {
-                    oldAmount: existing ? (existing.netPayableAmount || existing.amount || 0) : null,
-                    newAmount: data.netPayableAmount || data.amount || 0
+                    oldAmount: existing ? ((existing.netPayableAmount ?? existing.amount ?? 0)) : null,
+                    newAmount: (data.netPayableAmount ?? data.amount ?? 0)
                 },
                 createdAt: new Date().toISOString()
             }
@@ -418,11 +419,11 @@ const Purchasing = {
             
             if (existing && existing.farmerName) {
                 const f = existing.farmerName.trim().toLowerCase();
-                farmerDeltas[f] = (farmerDeltas[f] || 0) - ((existing.netPayableAmount || existing.amount || 0) - (existing.amountPaid || 0));
+                farmerDeltas[f] = (farmerDeltas[f] || 0) - (((existing.netPayableAmount ?? existing.amount ?? 0)) - (existing.amountPaid || 0));
             }
             if (data.farmerName) {
                 const f = data.farmerName.trim().toLowerCase();
-                farmerDeltas[f] = (farmerDeltas[f] || 0) + ((data.netPayableAmount || data.amount || 0) - (data.amountPaid || 0));
+                farmerDeltas[f] = (farmerDeltas[f] || 0) + (((data.netPayableAmount ?? data.amount ?? 0)) - (data.amountPaid || 0));
             }
             
             for (const [crop, delta] of Object.entries(stockDeltas)) {
@@ -441,13 +442,25 @@ const Purchasing = {
     },
 
     async save() {
+        if (this.saving) return;
+        this.saving = true;
+        try {
+            return await Utils.withReceiptSaveLock('purchase', () => this.saveReceipt());
+        } finally {
+            this.saving = false;
+        }
+    },
+
+    async saveReceipt() {
+        const snapshot = await DB.financialSnapshot();
+        if (!this.editingId) document.getElementById('p-id').value = await Utils.getNextReceiptId('purchase');
         const data = this.getData();
         if (!await this.validate(data)) return;
-        const existing = await DB.get('purchases', data.id);
+        const existing = this.editingId ? await DB.get('purchases', data.id) : null;
         if (existing) {
-            const payments = await DB.getByIndex('purchase_payments', 'purchaseId', data.id);
-            const oldAmount = existing.netPayableAmount || existing.amount || 0;
-            const newAmount = data.netPayableAmount || data.amount || 0;
+            const payments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', data.id);
+            const oldAmount = (existing.netPayableAmount ?? existing.amount ?? 0);
+            const newAmount = (data.netPayableAmount ?? data.amount ?? 0);
             if (payments.length && Math.abs(oldAmount - newAmount) > 0.01) {
                 const ok = await Utils.confirm(`This purchase has ${payments.length} linked payment(s). Change amount from PKR ${Utils.formatPKR(oldAmount)} to PKR ${Utils.formatPKR(newAmount)}?`);
                 if (!ok) return;
@@ -457,11 +470,15 @@ const Purchasing = {
         }
 
         const ops = await this.buildUnitOfWorkOperations(data, existing);
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await Utils.validateAdvanceHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         await Utils.confirmReceiptId('purchase', data.id);
 
         Utils.showToast('Purchase receipt saved!');
-        this.clearForm();
+        await this.clearForm();
         if (typeof StockAdjustments !== 'undefined' && typeof StockAdjustments.syncAll === 'function') await StockAdjustments.syncAll();
         return data;
     },
@@ -511,7 +528,7 @@ const Purchasing = {
     async loadForEdit(id) {
         const data = await DB.get('purchases', id);
         if (!data) return;
-        const payments = await DB.getByIndex('purchase_payments', 'purchaseId', id);
+        const payments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', id);
         if (payments.length) {
             const ok = await Utils.confirm(`This purchase has ${payments.length} linked payment(s). Editing weight, rate, deductions, or paid amount can change balances. Continue?`);
             if (!ok) return;
@@ -608,10 +625,12 @@ const PurchaseList = {
     },
 
     async delete(id) {
+        const snapshot = await DB.financialSnapshot();
         const purchase = await DB.get('purchases', id);
         if (!purchase) return;
-        const payments = await DB.getByIndex('purchase_payments', 'purchaseId', id);
+        const payments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', id);
         const expenses = await DB.getByIndex('expenses', 'purchaseId', id);
+        if (payments.some(p => (p.allocations || []).length > 1 || p.advanceCreatedId || (!p.allocations && /General .*payment/i.test(p.notes || '')))) { Utils.showToast('Reverse the general payment or excess advance before deleting this invoice.', 'error'); return; }
         const paymentTotal = Utils.sumBy(payments, 'amount');
         const expenseTotal = Utils.sumBy(expenses, 'amount');
         const msg = `Delete purchase ${id}?\n\nLinked farmer payments: ${payments.length} (PKR ${Utils.formatPKR(paymentTotal)})\nLinked expenses that will be removed: ${expenses.length} (PKR ${Utils.formatPKR(expenseTotal)})\nLinked capital transactions for those payments/expenses will also be removed.`;
@@ -625,7 +644,7 @@ const PurchaseList = {
             ops.push({ storeName: 'expenses', action: 'delete', key: e.id, softDelete: true, data: e });
         }
         for (const p of payments) {
-            const linkedCap = allCapTxs.filter(t => t.sourceStore === 'purchase_payments' && t.sourceId === p.id);
+            const linkedCap = allCapTxs.filter(t => Utils.isLinkedCapitalTx(t, 'purchase_payments', p.id, p.capitalTxId));
             for (const lc of linkedCap) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lc.id, softDelete: true, data: lc });
             ops.push({ storeName: 'purchase_payments', action: 'delete', key: p.id, softDelete: true, data: p });
         }
@@ -634,7 +653,7 @@ const PurchaseList = {
 
         ops.push({ storeName: 'audit_logs', action: 'put', data: {
             id: Utils.generateId(), date: Utils.todayISO(), action: 'delete',
-            entityType: 'purchase', entityId: id, details: { amount: purchase.netPayableAmount || purchase.amount || 0 },
+            entityType: 'purchase', entityId: id, details: { amount: (purchase.netPayableAmount ?? purchase.amount ?? 0) },
             createdAt: new Date().toISOString()
         }});
 
@@ -644,16 +663,20 @@ const PurchaseList = {
                 if (op) ops.push(op);
             }
             if (purchase.farmerName) {
-                const op = await CoreServices.getPartyBalanceOp('farmer', purchase.farmerName, -((purchase.netPayableAmount || purchase.amount || 0) - (purchase.amountPaid || 0)));
+                const op = await CoreServices.getPartyBalanceOp('farmer', purchase.farmerName, -(((purchase.netPayableAmount ?? purchase.amount ?? 0)) - (purchase.amountPaid || 0)));
                 if (op) ops.push(op);
             }
         }
 
         ops.push({ storeName: 'purchases', action: 'delete', key: id, softDelete: true, data: purchase });
 
-        await DB.commitUnitOfWork(ops);
+        try {
+            await Utils.validateStockHistory(ops);
+            await Utils.validateAdvanceHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         await Utils.audit('delete', 'purchase', id, {
-            oldAmount: purchase.netPayableAmount || purchase.amount || 0,
+            oldAmount: (purchase.netPayableAmount ?? purchase.amount ?? 0),
             oldRecord: purchase,
             linkedPayments: payments,
             linkedExpenses: expenses
