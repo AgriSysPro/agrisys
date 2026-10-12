@@ -13,6 +13,7 @@ const element = id => {
 const context = vm.createContext({ console: { log() {}, warn() {}, error() {} }, structuredClone, Date, Math,
     setTimeout() {}, location: { reload() {} }, window: {},
     document: { getElementById: element, addEventListener() {}, querySelector: () => element('selector'), querySelectorAll: () => [] } });
+context.XLSX = { utils: { json_to_sheet: rows => rows, book_new: () => ({ SheetNames: [], Sheets: {} }), book_append_sheet: (wb, sheet, name) => { wb.Sheets[name] = sheet; wb.SheetNames.push(name); } }, writeFile: (wb, name) => { context.lastExport = { wb, name }; } };
 const files = fs.readdirSync(path.join(root, 'js')).filter(f => f.endsWith('.js'));
 for (const file of files) vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), context, { filename: file });
 const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, CropAnalysis, StockAdjustments, Settings, PaymentService, InventoryLots, PurchaseList, SaleList})', context);
@@ -45,6 +46,8 @@ api.DB.commitUnitOfWork = (ops, expected) => {
     return result;
 };
 api.Utils.generateId = () => `test-${++seq}`;
+api.Utils.requireExcel = () => true;
+api.Utils.todayISO = () => '2026-12-31';
 api.Utils.getNextReceiptId = async () => String(++seq);
 api.Utils.showToast = api.Utils.showModal = api.Utils.hideModal = api.Utils.audit = () => {};
 api.Utils.confirm = async () => true;
@@ -315,6 +318,42 @@ const sale = (id, extra = {}) => ({ id, buyerName: 'Ali', crop: 'Wheat', date: '
         assert.equal(records.purchase_payments[0].farmerName, 'Ali Khan');
         assert.equal(records.farmer_advances[0].farmerName, 'Ali Khan');
         assert.equal(records.opening_balances[0].partyName, 'Ali Khan');
+    });
+    await check('Buyer Excel summary matches allocated receipts and remaining opening deposit', async () => {
+        records.buyers = [{ id: 'B', name: 'Ali' }];
+        records.sales = [sale('S1', { amount: 100, amountReceived: 70, initialReceiptAmount: 20 })];
+        records.sale_payments = [{ id: 'SP1', buyerName: 'Ali', saleId: 'S1', allocations: [{ invoiceId: 'S1', amount: 50 }], amount: 50, advanceDeducted: 30, date: '2026-02-01' }];
+        records.opening_balances = [{ id: 'OB', type: 'buyer_advance', partyName: 'Ali', amount: 80, date: '2026-01-01' }];
+        await api.Buyers.exportExcel();
+        const row = context.lastExport.wb.Sheets.Buyers[0];
+        assert.equal(row['Total Received'], 70);
+        assert.equal(row.Balance, -20);
+    });
+    await check('Farmer Excel summary reconstructs allocated payments and remaining advance', async () => {
+        records.farmers = [{ id: 'F', name: 'Ali' }];
+        records.purchases = [purchase('P1', { amount: 120, netPayableAmount: 100, amountPaid: 70, initialPaymentAmount: 20 })];
+        records.purchase_payments = [{ id: 'PP1', farmerName: 'Ali', purchaseId: 'P1', allocations: [{ invoiceId: 'P1', amount: 50 }], amount: 50, advanceDeducted: 30, date: '2026-02-01' }];
+        records.opening_balances = [{ id: 'OB', type: 'farmer_advance', partyName: 'Ali', amount: 100, date: '2026-01-01' }];
+        await api.Farmers.exportExcel();
+        const row = context.lastExport.wb.Sheets.Farmers[0];
+        assert.equal(row['Total Paid'], 70);
+        assert.equal(row['Open Advances'], 70);
+        assert.equal(row.Balance, 30);
+    });
+    await check('FIFO and bookkeeping use gross inventory cost and preserve a legitimate zero', async () => {
+        const p = purchase('P1', { amount: 100, payableBeforeAdvance: 80, netPayableAmount: 70, advanceDeducted: 10 });
+        const lots = api.Utils.calculateInventoryLots([p], [sale('S1')]);
+        assert.equal(lots.Wheat.cogs, 100);
+        assert.equal(api.Utils.calculateInventoryLots([{ ...p, amount: 0 }], [sale('S1')]).Wheat.cogs, 0);
+        records.purchases = [p];
+        const entries = await api.Bookkeeping.generateEntries('', '2026-12-31');
+        assert.equal(entries.find(e => e.account === 'Inventory / Purchases').debit, 100);
+    });
+    await check('Party balance rebuild uses payment allocations when invoice totals are stale', async () => {
+        records.sales = [sale('S1', { amount: 100, amountReceived: 0, initialReceiptAmount: 0 })];
+        records.sale_payments = [{ id: 'SP1', buyerName: 'Ali', saleId: 'S1', allocations: [{ invoiceId: 'S1', amount: 40 }], amount: 40, date: '2026-02-01' }];
+        await api.CoreServices.runMaterializedViewMigrations();
+        assert.equal(await api.CoreServices.getBuyerBalance('Ali'), 60);
     });
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]);

@@ -483,30 +483,9 @@ const BankAccounts = {
             const linked = allTx.filter(t => t.transferId === tx.transferId && t.id !== id);
             for (const lt of linked) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lt.id, softDelete: true, data: lt });
         }
-        if (tx && tx.sourceStore && tx.sourceId) {
-            const src = await DB.get(tx.sourceStore, tx.sourceId);
-            if (src) ops.push({ storeName: tx.sourceStore, action: 'delete', key: tx.sourceId, softDelete: true, data: src });
-        }
-
         await DB.commitUnitOfWork(ops);
         Utils.showToast('Deleted!');
         this.render();
-    },
-
-    async deleteLinkedTx(sourceStore, sourceId) {
-        const allTx = await DB.getAll('capital_transactions') || [];
-        const linked = allTx.filter(t => t.sourceStore === sourceStore && t.sourceId === sourceId);
-        for (const lt of linked) {
-            if (lt.accountId) {
-                const acc = await DB.get('capital_accounts', lt.accountId);
-                if (acc) {
-                    if (lt.type === 'deposit') acc.balance = Math.max(0, (acc.balance || 0) - (lt.amount || 0));
-                    else acc.balance = (acc.balance || 0) + (lt.amount || 0);
-                    await DB.put('capital_accounts', acc);
-                }
-            }
-            await DB.delete('capital_transactions', lt.id);
-        }
     },
 
     // ── Account Statement PDF ──

@@ -48,6 +48,8 @@ const CoreServices = {
         // Rebuild from source records, including after restore and schema changes.
         const purchases = (await DB.getAll('purchases')).filter(p => p.type !== 'opening_balance');
         const sales = await DB.getAll('sales');
+        const purchasePayments = await DB.getAll('purchase_payments');
+        const salePayments = await DB.getAll('sale_payments');
         const adjustments = await DB.getAll('stock_adjustments');
         const adjusted = Utils.applyStockAdjustments(purchases, sales, adjustments);
         const stock = {}, parties = {};
@@ -60,8 +62,8 @@ const CoreServices = {
             parties[id] ||= { id, type, partyName: normalized, balance: 0 };
             parties[id].balance += delta;
         };
-        purchases.forEach(p => addParty('farmer', p.farmerName, Utils.purchasePayableAmount(p) - (p.amountPaid || 0) + (p.advanceDeducted || 0)));
-        sales.forEach(s => addParty('buyer', s.buyerName, (s.amount || 0) - (s.amountReceived || 0)));
+        purchases.forEach(p => addParty('farmer', p.farmerName, Utils.purchasePayableAmount(p) - Utils.paymentTotalFor(p, purchasePayments, 'purchaseId', 'amountPaid') + (p.advanceDeducted || 0)));
+        sales.forEach(s => addParty('buyer', s.buyerName, (s.amount || 0) - Utils.paymentTotalFor(s, salePayments, 'saleId', 'amountReceived')));
         const openings = await DB.getAll('opening_balances');
         openings.forEach(o => {
             if (o.type === 'farmer_payable') addParty('farmer', o.partyName, (o.amount || 0) - Utils.openingBalanceSettled(o));
@@ -70,8 +72,8 @@ const CoreServices = {
             if (o.type === 'buyer_advance') addParty('buyer', o.partyName, -(o.amount || 0));
         });
         (await DB.getAll('farmer_advances')).filter(a => a.amount > 0).forEach(a => addParty('farmer', a.farmerName, -a.amount));
-        (await DB.getAll('purchase_payments')).forEach(p => addParty('farmer', p.farmerName, p.advanceDeducted || 0));
-        (await DB.getAll('sale_payments')).forEach(p => addParty('buyer', p.buyerName, p.advanceDeducted || 0));
+        purchasePayments.forEach(p => addParty('farmer', p.farmerName, p.advanceDeducted || 0));
+        salePayments.forEach(p => addParty('buyer', p.buyerName, p.advanceDeducted || 0));
         const ops = [];
         for (const store of ['warehouse_stock', 'party_running_balances']) {
             (await DB.getAll(store)).forEach(record => ops.push({ storeName: store, action: 'delete', key: record.id ?? record.crop }));

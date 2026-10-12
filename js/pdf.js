@@ -196,7 +196,7 @@ const ReceiptPDF = {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
-            const qrText = `AgriSys Purchase\nID: ${data.id}\nDate: ${data.date}\nFarmer: ${data.farmerName}\nNet Payable: PKR ${data.netPayableAmount || data.amount}`;
+            const qrText = `AgriSys Purchase\nID: ${data.id}\nDate: ${data.date}\nFarmer: ${data.farmerName}\nNet Payable: PKR ${data.netPayableAmount ?? data.amount ?? 0}`;
             const qrImage = template.showQR === false ? null : await this.getQRCode(qrText);
 
             if (template.copyLayout === 'single-copy') {

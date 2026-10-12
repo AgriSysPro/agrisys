@@ -147,6 +147,14 @@ const { pathToFileURL } = require('node:url');
         try { await DB.commitUnitOfWork([{ storeName: 'purchases', action: 'put', data: invoice }], stale); }
         catch (error) { conflict = error.code === 'CONFLICT'; }
         assert(conflict && (await DB.get('purchases', 'RACE')).notes === 'Changed in other editor', 'Stale write was not rejected');
+        const independentSnapshot = await DB.financialSnapshot();
+        await DB.put('expenses', { id: 'INDEPENDENT', amount: 25, date: '2026-01-02' });
+        await DB.commitUnitOfWork([{ storeName: 'purchases', action: 'put', data: { ...(await DB.get('purchases', 'RACE')), notes: 'Unrelated expense does not block purchase edit' } }], independentSnapshot);
+        assert((await DB.get('purchases', 'RACE')).notes === 'Unrelated expense does not block purchase edit', 'Unrelated expense caused a false financial conflict');
+        const otherPartySnapshot = await DB.financialSnapshot();
+        await DB.put('purchase_payments', { id: 'OTHER-PARTY', farmerName: 'Different Farmer', purchaseId: 'OTHER', amount: 10, date: '2026-01-02' });
+        await DB.commitUnitOfWork([{ storeName: 'purchases', action: 'put', data: { ...(await DB.get('purchases', 'RACE')), notes: 'Other party payment does not block purchase edit' } }], otherPartySnapshot);
+        assert((await DB.get('purchases', 'RACE')).notes === 'Other party payment does not block purchase edit', 'Unrelated party payment caused a false financial conflict');
         // Start a clean financial fixture inside this disposable browser profile.
         for (const store of Object.keys(await DB.exportAll()).filter(k => !k.startsWith('_'))) await DB.clear(store);
         await DB.put('capital_accounts', { id: 'cash', name: 'Cash', openingBalance: 100, createdAt: '2026-01-01' });

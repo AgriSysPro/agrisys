@@ -197,23 +197,24 @@ const Farmers = {
         if (!Utils.requireExcel()) return;
         const farmers = await DB.getAll('farmers');
         const activeSeason = await Utils.getActiveSeason();
-        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
-        const purchasePayments = Utils.filterBySeason(await DB.getAll('purchase_payments'), activeSeason);
-        const advances = Utils.filterBySeason(await DB.getAll('farmer_advances'), activeSeason);
-        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        const untilDate = activeSeason?.endDate || null;
+        const purchases = (await DB.getAll('purchases')).filter(p => !untilDate || p.date <= untilDate);
+        const purchasePayments = await DB.getAll('purchase_payments');
+        const advances = (await DB.getAll('farmer_advances')).filter(a => !untilDate || a.date <= untilDate);
+        const openings = (await DB.getAll('opening_balances')).filter(o => !untilDate || o.date <= untilDate);
         const debts = Utils.filterBySeason(await DB.getAll('company_debts'), activeSeason);
         if (!farmers.length) { Utils.showToast('No data to export', 'warning'); return; }
         
         const rows = farmers.sort((a,b) => a.name.localeCompare(b.name)).map(f => {
-            const fp = purchases.filter(p => p.farmerName.toLowerCase() === f.name.toLowerCase());
+            const fp = purchases.filter(p => (p.farmerName || '').toLowerCase() === f.name.toLowerCase());
             const openingPayable = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const openingPaid = openings.filter(o => o.type === 'farmer_payable' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.paidAmount || o.settledAmount || 0), 0);
             const openingAdvance = openings.filter(o => o.type === 'farmer_advance' && (o.partyName || '').toLowerCase() === f.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const totalAmt = openingPayable + fp.reduce((s, p) => s + ((p.netPayableAmount ?? p.amount ?? 0)), 0);
-            const totalPaid = openingPaid + fp.reduce((s, p) => s + (p.amountPaid || 0), 0);
+            const totalPaid = openingPaid + fp.reduce((s, p) => s + Utils.paymentTotalFor(p, purchasePayments, 'purchaseId', 'amountPaid', untilDate), 0);
             const givenAdv = advances.filter(a => a.farmerName && a.farmerName.toLowerCase() === f.name.toLowerCase() && (a.amount || 0) > 0).reduce((s, a) => s + (a.amount || 0), 0);
             const recoveredAdv = fp.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-            const adjustedAdv = purchasePayments.filter(p => p.farmerName && p.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
+            const adjustedAdv = purchasePayments.filter(p => (!untilDate || p.date <= untilDate) && p.farmerName && p.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const openAdv = Math.max(0, openingAdvance + givenAdv - recoveredAdv - adjustedAdv);
             const fDebts = debts.filter(d => (d.personName || '').trim().toLowerCase() === f.name.toLowerCase());
             const netDebt = Math.max(0, fDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0) - fDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0));

@@ -429,7 +429,7 @@ const App = {
         const ptbody = document.querySelector('#dashboard-recent-purchases tbody');
         ptbody.innerHTML = recent.map(p => `<tr>
             <td>${Utils.escapeHTML(p.id)}</td><td>${Utils.formatDate(p.date)}</td><td class="font-bold">${Utils.escapeHTML(p.farmerName)}</td>
-            <td>${Utils.escapeHTML(p.crop)}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(p.netPayableAmount || p.amount)}</td>
+            <td>${Utils.escapeHTML(p.crop)}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(p.netPayableAmount ?? p.amount ?? 0)}</td>
             <td>${Utils.statusBadge(p.paymentStatus)}</td>
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted)">No purchases yet</td></tr>';
 

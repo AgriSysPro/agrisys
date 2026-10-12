@@ -612,7 +612,7 @@ const PurchaseList = {
             <td>${p.method === 'scale' ? '⚖️' : '🛍️'}</td>
             <td>${Utils.formatNum(p.netWeight)} KG</td>
             <td>PKR ${Utils.formatPKR(p.rate)}</td>
-            <td class="text-right font-bold">PKR ${Utils.formatPKR(p.netPayableAmount || p.amount)}</td>
+            <td class="text-right font-bold">PKR ${Utils.formatPKR(p.netPayableAmount ?? p.amount ?? 0)}</td>
             <td>${Utils.statusBadge(p.paymentStatus)}</td>
             <td><div class="table-actions">
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="Purchasing.loadForEdit('${p.id}')" title="Edit">✏️</button>
@@ -700,7 +700,7 @@ const PurchaseExport = {
             'Net Maund': Utils.formatNum(p.netMn,2), 'Rate/Mn': p.rate,
             'Amount': p.amount, 'PKR Deductions': p.totalPkrDeductions || 0,
             'Cost Before Advance': Utils.purchaseCostAmount(p),
-            'Net Payable': p.netPayableAmount || p.amount,
+            'Net Payable': p.netPayableAmount ?? p.amount ?? 0,
             'Paid': p.amountPaid, 'Balance': p.balance, 'Status': p.paymentStatus
         }));
         const ws = XLSX.utils.json_to_sheet(rows);

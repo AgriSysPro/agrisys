@@ -124,6 +124,22 @@
     {
       "name": "Party rename updates payments, advances, and openings atomically and rejects duplicates",
       "status": "PASS"
+    },
+    {
+      "name": "Buyer Excel summary matches allocated receipts and remaining opening deposit",
+      "status": "PASS"
+    },
+    {
+      "name": "Farmer Excel summary reconstructs allocated payments and remaining advance",
+      "status": "PASS"
+    },
+    {
+      "name": "FIFO and bookkeeping use gross inventory cost and preserve a legitimate zero",
+      "status": "PASS"
+    },
+    {
+      "name": "Party balance rebuild uses payment allocations when invoice totals are stale",
+      "status": "PASS"
     }
   ]
 }

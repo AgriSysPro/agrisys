@@ -344,7 +344,44 @@ const DB = {
 
     async commitUnitOfWork(operations, expected = null) {
         if (!operations || !operations.length) return true;
-        const storeNames = [...new Set([...operations.map(op => op.storeName), ...Object.keys(expected || {})])];
+        const operationStores = new Set(operations.map(op => op.storeName));
+        const dependencyGroups = [
+            ['purchases', 'sales', 'stock_adjustments'],
+            ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments']
+        ];
+        const getKey = row => row?.id ?? row?.key ?? row?.crop ?? row?.seasonId;
+        const scopes = new Map();
+        const addScope = (store, predicate) => scopes.set(store, [...(scopes.get(store) || []), predicate]);
+        for (const op of operations) {
+            const prior = (expected?.[op.storeName] || []).find(row => getKey(row) === (op.key ?? getKey(op.data)));
+            const row = op.data || prior;
+            const key = op.key ?? getKey(op.data);
+            if (key !== undefined) addScope(op.storeName, record => getKey(record) === key);
+            if (row?.crop) addScope(op.storeName, record => (record.crop || '').trim().toLowerCase() === row.crop.trim().toLowerCase());
+            const names = [row?.farmerName, row?.buyerName, row?.partyName].filter(Boolean).map(name => name.trim().toLowerCase());
+            if (names.length) addScope(op.storeName, record => [record.farmerName, record.buyerName, record.partyName].some(name => name && names.includes(name.trim().toLowerCase())));
+        }
+        for (const group of dependencyGroups) {
+            if (!group.some(name => operationStores.has(name))) continue;
+            const ops = operations.filter(op => group.includes(op.storeName));
+            const crops = new Set();
+            const parties = new Set();
+            for (const op of ops) {
+                const old = (expected?.[op.storeName] || []).find(row => getKey(row) === (op.key ?? getKey(op.data)));
+                for (const row of [old, op.data]) {
+                    if (row?.crop) crops.add(row.crop.trim().toLowerCase());
+                    for (const name of [row?.farmerName, row?.buyerName, row?.partyName]) if (name) parties.add(name.trim().toLowerCase());
+                }
+            }
+            for (const name of group) {
+                if (group.includes('stock_adjustments') && crops.size) addScope(name, row => crops.has((row.crop || '').trim().toLowerCase()));
+                if (group.includes('farmer_advances') && parties.size) addScope(name, row => [row.farmerName, row.buyerName, row.partyName].some(value => value && parties.has(value.trim().toLowerCase())));
+            }
+        }
+        const checkedExpected = expected && Object.fromEntries(Object.entries(expected)
+            .filter(([name]) => operationStores.has(name) || scopes.has(name))
+            .map(([name, rows]) => [name, scopes.has(name) ? rows.filter(row => scopes.get(name).some(predicate => predicate(row))) : rows]));
+        const storeNames = [...new Set([...operationStores, ...Object.keys(checkedExpected || {})])];
 
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction(storeNames, 'readwrite');
@@ -368,14 +405,20 @@ const DB = {
                     }
                 } catch (error) { tx.abort(); reject(error); }
             };
-            if (!expected) { write(); return; }
-            let pending = Object.keys(expected).length;
+            if (!checkedExpected) { write(); return; }
+            let pending = Object.keys(checkedExpected).length;
             if (!pending) { write(); return; }
-            for (const [name, rows] of Object.entries(expected)) {
+            const canonicalRows = rows => rows
+                .map(row => JSON.stringify(row, (key, value) => value && typeof value === 'object' && !Array.isArray(value)
+                    ? Object.fromEntries(Object.keys(value).sort().map(k => [k, value[k]]))
+                    : value))
+                .sort();
+            for (const [name, rows] of Object.entries(checkedExpected)) {
                 const request = tx.objectStore(name).getAll();
                 request.onsuccess = () => {
                     const current = request.result.filter(r => !r.isDeleted);
-                    if (JSON.stringify(current) !== JSON.stringify(rows)) {
+                    const currentRelevant = scopes.has(name) ? current.filter(row => scopes.get(name).some(predicate => predicate(row))) : current;
+                    if (JSON.stringify(canonicalRows(currentRelevant)) !== JSON.stringify(canonicalRows(rows))) {
                         const error = new Error('Records changed in another operation. Please retry.');
                         error.code = 'CONFLICT';
                         reject(error); tx.abort(); return;

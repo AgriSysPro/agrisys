@@ -976,7 +976,7 @@ const Utils = {
             .forEach(p => {
                 if (!p.crop || (p.netWeight || 0) <= 0) return;
                 const key = getCropKey(p.crop);
-                const cost = (p.amount || this.purchaseCostAmount(p)) + (expenseByPurchase[p.id] || 0);
+                const cost = (p.amount ?? this.purchaseCostAmount(p)) + (expenseByPurchase[p.id] || 0);
                 if (!lotsByCropKey[key]) lotsByCropKey[key] = [];
                 lotsByCropKey[key].push({
                     sourceId: p.id,

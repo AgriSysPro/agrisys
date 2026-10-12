@@ -115,18 +115,21 @@ const Buyers = {
         if (!Utils.requireExcel()) return;
         const buyers = await DB.getAll('buyers');
         const activeSeason = await Utils.getActiveSeason();
-        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
-        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        const untilDate = activeSeason?.endDate || null;
+        const sales = (await DB.getAll('sales')).filter(s => !untilDate || s.date <= untilDate);
+        const salePayments = await DB.getAll('sale_payments');
+        const openings = (await DB.getAll('opening_balances')).filter(o => !untilDate || o.date <= untilDate);
         const debts = Utils.filterBySeason(await DB.getAll('company_debts'), activeSeason);
         if (!buyers.length) { Utils.showToast('No data to export', 'warning'); return; }
 
         const rows = buyers.sort((a, b) => a.name.localeCompare(b.name)).map(b => {
-            const bs = sales.filter(s => s.buyerName.toLowerCase() === b.name.toLowerCase());
+            const bs = sales.filter(s => (s.buyerName || '').toLowerCase() === b.name.toLowerCase());
             const openingReceivable = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const openingReceived = openings.filter(o => o.type === 'buyer_receivable' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.receivedAmount || o.settledAmount || 0), 0);
             const openingAdvance = openings.filter(o => o.type === 'buyer_advance' && (o.partyName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, o) => s + (o.amount || 0), 0);
             const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
-            const totalRcvd = openingReceived + bs.reduce((s, x) => s + (x.amountReceived || 0), 0);
+            const totalRcvd = openingReceived + bs.reduce((s, x) => s + Utils.paymentTotalFor(x, salePayments, 'saleId', 'amountReceived', untilDate), 0);
+            const appliedDeposit = salePayments.filter(p => (!untilDate || p.date <= untilDate) && (p.buyerName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const bDebts = debts.filter(d => (d.personName || '').trim().toLowerCase() === b.name.toLowerCase());
             const netDebt = Math.max(0, bDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0) - bDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0));
             return {
@@ -137,7 +140,7 @@ const Buyers = {
                 'Total Received': totalRcvd,
                 'Opening Advance': openingAdvance,
                 'Debts / Loans Receivable': netDebt,
-                'Balance': totalAmt - totalRcvd - openingAdvance
+                'Balance': totalAmt - totalRcvd - Math.max(0, openingAdvance - appliedDeposit)
             };
         });
         const ws = XLSX.utils.json_to_sheet(rows);
