@@ -1011,7 +1011,7 @@
             <!-- Automated Backup, Security & Local Vault -->
             <div class="card" style="margin-bottom:20px">
                 <div class="card-header">
-                    <h3 class="card-title"><i data-lucide="shield-check"></i> Encrypted Auto-Backup & Cloud Sync</h3>
+                    <h3 class="card-title"><i data-lucide="shield-check"></i> Encrypted Auto-Backup & Local Vault</h3>
                 </div>
                 <div class="form-grid">
                     <div class="form-group" style="display:flex;align-items:center;gap:10px;padding-top:24px">
@@ -1033,7 +1033,7 @@
                 </div>
                 <div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap">
                     <button class="btn btn-primary" onclick="BackupManager.saveSettingsFromForm()"><i data-lucide="save"></i> Save Security Settings</button>
-                    <button class="btn btn-success" onclick="BackupManager.exportToGoogleDrive()"><i data-lucide="cloud-upload"></i> Backup to Google Drive</button>
+                    <button class="btn btn-success" onclick="BackupManager.downloadBackupForDrive()"><i data-lucide="download"></i> Download Backup for Google Drive</button>
                 </div>
 
                 <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--border-color)">
@@ -1303,6 +1303,7 @@
             <div class="form-grid">
                 <div class="form-group"><label class="form-label">Account</label><select class="form-select" id="tx-account"></select></div>
                 <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="tx-type"><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option></select></div>
+                <div class="form-group full-width"><label class="form-label">Offset account <span class="required">*</span></label><select class="form-select" id="tx-offset-account"></select><small class="form-hint">Choose the income, expense, capital, or other account that explains this cash movement.</small></div>
                 <div class="form-group"><label class="form-label">Amount (PKR)</label><input class="form-input" type="number" id="tx-amount" step="0.01"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="tx-date"></div>
                 <div class="form-group full-width"><label class="form-label">Description</label><input class="form-input" id="tx-desc"></div>

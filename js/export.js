@@ -22,100 +22,49 @@ const ExportUtils = {
     async allToExcel() {
         if (!Utils.requireExcel()) return;
         Utils.showLoading('Creating full Excel backup...');
-        const activeSeason = await Utils.getActiveSeason();
-        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
-        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
-        const expenses = Utils.filterBySeason(await DB.getAll('expenses'), activeSeason);
-        const openingBalances = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
-        const openingPayments = Utils.filterBySeason(await DB.getAll('opening_balance_payments'), activeSeason);
-        const farmers = await DB.getAll('farmers');
-        const buyers = await DB.getAll('buyers');
-
-        const wb = XLSX.utils.book_new();
-
-        if (purchases.length) {
-            const ps = purchases.map(p => ({
-                ID: p.id, Date: p.date, Farmer: p.farmerName, Crop: p.crop,
-                'Gross (KG)': p.grossWeight, 'Net (KG)': p.netWeight, 'Rate/Mn': p.rate,
-                Amount: p.amount, 'Net Payable': p.netPayableAmount, Paid: p.amountPaid,
-                Balance: p.balance, Status: p.paymentStatus
+        try {
+            const data = await DB.exportAll();
+            const wb = XLSX.utils.book_new();
+            const labels = {
+                settings: 'Settings', purchases: 'Purchases', farmers: 'Farmers', purchase_payments: 'Purchase Payments',
+                sales: 'Sales', sale_payments: 'Sale Payments', expenses: 'Expenses', capital_accounts: 'Bank Accounts',
+                capital_transactions: 'Cash Bank Transactions', capital_entries: 'Owner Capital', company_debts: 'Debts Loans',
+                partners: 'Partners', partner_transactions: 'Partner Transactions', buyers: 'Buyers', farmer_advances: 'Farmer Advances',
+                deductions: 'Deductions', journal_entries: 'Journal Entries', seasons: 'Seasons', audit_logs: 'Audit Logs',
+                opening_balances: 'Opening Balances', stock_adjustments: 'Stock Adjustments',
+                opening_balance_payments: 'Opening Payments', commissions: 'Commissions', retained_earnings: 'Retained Earnings'
+            };
+            const scrubSecrets = value => {
+                if (Array.isArray(value)) return value.map(scrubSecrets);
+                if (!value || typeof value !== 'object') return value;
+                return Object.fromEntries(Object.entries(value).map(([key, item]) =>
+                    [key, /passphrase|password|secret|token/i.test(key) ? '[omitted from spreadsheet]' : scrubSecrets(item)]
+                ));
+            };
+            const flatten = record => Object.fromEntries(Object.entries(record).map(([key, value]) => {
+                if (/image|signaturedata/i.test(key) && typeof value === 'string' && value.length > 1000) return [`${key}Attached`, true];
+                if (value && typeof value === 'object') return [key, JSON.stringify(value)];
+                return [key, value];
             }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ps), 'Purchases');
+            const transactions = data.capital_transactions || [];
+            for (const [store, sheetName] of Object.entries(labels)) {
+                let rows = Array.isArray(data[store]) ? data[store] : [];
+                if (store === 'settings') rows = scrubSecrets(rows);
+                if (store === 'capital_accounts') {
+                    rows = rows.map(account => ({
+                        ...account,
+                        openingBalance: account.openingBalance || 0,
+                        currentBalance: Utils.capitalAccountBalance(account, transactions)
+                    }));
+                }
+                XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(flatten)), sheetName);
+            }
+            XLSX.writeFile(wb, `AgriSys_Full_${Utils.todayISO()}.xlsx`);
+            Utils.showToast('Full historical data export complete!');
+        } catch (error) {
+            Utils.showToast('Excel export failed: ' + error.message, 'error');
+        } finally {
+            Utils.hideLoading();
         }
-
-        if (sales.length) {
-            const ss = sales.map(s => ({
-                ID: s.id, Date: s.date, Buyer: s.buyerName, Crop: s.crop,
-                'Gross (KG)': s.grossWeight, 'Net (KG)': s.netWeight, 'Rate/Mn': s.rate,
-                Amount: s.amount, Received: s.amountReceived, Balance: s.balance, Status: s.paymentStatus
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ss), 'Sales');
-        }
-
-        if (expenses.length) {
-            const es = expenses.map(e => ({
-                ID: e.id, Date: e.date, Type: e.type, Description: e.description,
-                Crop: e.crop, 'Linked Receipt': e.purchaseId, Amount: e.amount
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(es), 'Expenses');
-        }
-
-        if (openingBalances.length) {
-            const obs = openingBalances.map(o => ({
-                ID: o.id, Date: o.date, Type: o.type, Party: o.partyName, Crop: o.crop,
-                Amount: o.amount, Settled: o.paidAmount || o.receivedAmount || o.settledAmount || 0,
-                Balance: Math.max(0, (o.amount || 0) - (o.paidAmount || o.receivedAmount || o.settledAmount || 0)),
-                Status: o.settlementStatus || 'pending'
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(obs), 'Opening Balances');
-        }
-
-        if (openingPayments.length) {
-            const ops = openingPayments.map(p => ({
-                ID: p.id, 'Receipt No': p.receiptNo, Date: p.date, Type: p.type, Party: p.partyName,
-                Amount: p.amount, Mode: p.mode, Reference: p.reference, 'Opening Balance ID': p.openingBalanceId
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ops), 'Opening Payments');
-        }
-
-        if (farmers.length) {
-            const fs = farmers.map(f => ({ Name: f.name, Phone: f.phone, Address: f.address }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(fs), 'Farmers');
-        }
-
-        if (buyers.length) {
-            const bs = buyers.map(b => ({ Name: b.name, Phone: b.phone, Address: b.address }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bs), 'Buyers');
-        }
-
-        const debts = Utils.filterBySeason(await DB.getAll('company_debts') || [], activeSeason);
-        if (debts.length) {
-            const ds = debts.map(d => ({
-                ID: d.id, Date: d.date, Party: d.personName, Type: d.type === 'given' ? 'Loan Issued' : 'Repayment Received',
-                Amount: d.amount, Notes: d.notes || ''
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(ds), 'Debts & Loans');
-        }
-
-        const accounts = await DB.getAll('capital_accounts') || [];
-        if (accounts.length) {
-            const as = accounts.map(a => ({
-                ID: a.id, Name: a.name, Type: a.type, 'Account Number': a.accountNumber || '',
-                'Opening Balance': a.openingBalance || 0, 'Current Balance': a.balance || 0
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(as), 'Bank Accounts');
-        }
-
-        const capEntries = Utils.filterBySeason(await DB.getAll('capital_entries') || [], activeSeason);
-        if (capEntries.length) {
-            const cs = capEntries.map(e => ({
-                ID: e.id, Date: e.date, Type: e.type, Amount: e.amount, Description: e.description || ''
-            }));
-            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cs), 'Owner Capital');
-        }
-
-        XLSX.writeFile(wb, `AgriSys_Full_${Utils.todayISO()}.xlsx`);
-        Utils.hideLoading();
-        Utils.showToast('Full export complete!');
     }
 };

@@ -106,8 +106,22 @@ const Buyers = {
     },
 
     async delete(id) {
-        if (!await Utils.confirm('Delete this buyer? Associated sale records will NOT be deleted.')) return;
-        await DB.delete('buyers', id);
+        const buyer = await DB.get('buyers', id);
+        if (!buyer) return;
+        const name = (buyer.name || '').trim().toLowerCase();
+        const sources = ['sales', 'sale_payments', 'opening_balances', 'opening_balance_payments', 'company_debts'];
+        const linked = (await Promise.all(sources.map(store => DB.getAll(store)))).flat().filter(row => {
+            const party = (row.buyerName || row.partyName || row.personName || '').trim().toLowerCase();
+            return party === name && (!row.type || row.type.startsWith('buyer_') || row.type === 'given' || row.type === 'repaid');
+        });
+        if (linked.length) { Utils.showToast('This buyer has financial history and cannot be deleted. Keep the profile so its ledgers remain connected.', 'warning'); return; }
+        if (!await Utils.confirm('Delete this buyer?')) return;
+        const snapshot = await DB.financialSnapshot();
+        try { await DB.commitUnitOfWork([
+            { storeName: 'buyers', action: 'delete', key: id, softDelete: true, data: buyer },
+            { storeName: 'audit_logs', action: 'add', data: Utils.createAuditRecord('delete', 'buyer', id, { name: buyer.name }) }
+        ], snapshot); }
+        catch (error) { Utils.showToast(error.message || 'Could not delete buyer.', 'error'); return; }
         Utils.showToast('Buyer deleted!');
         this.render();
     },

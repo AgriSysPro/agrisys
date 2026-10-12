@@ -111,7 +111,6 @@ const BackupManager = {
             autoBackupEnabled: true,
             frequency: 'daily', // 'daily', 'weekly', 'manual'
             passphrase: '',
-            googleDriveSync: false,
             lastAutoBackup: null
         };
     },
@@ -212,9 +211,9 @@ const BackupManager = {
         }
     },
 
-    async exportToGoogleDrive() {
+    async downloadBackupForDrive() {
         try {
-            Utils.showLoading('Preparing Google Drive backup...');
+            Utils.showLoading('Preparing backup file for Google Drive...');
             const config = await this.getBackupSettings();
             const rawData = await DB.exportAll();
             const jsonStr = JSON.stringify(rawData, null, 2);
@@ -232,18 +231,20 @@ const BackupManager = {
             URL.revokeObjectURL(url);
 
             Utils.hideLoading();
-            Utils.showToast(passphrase ? 'Encrypted backup generated!' : 'Backup file generated!');
+            Utils.showToast(passphrase ? 'Encrypted backup downloaded. Upload it to Google Drive manually.' : 'Backup downloaded. Upload it to Google Drive manually.');
 
             // Prompt user to open Google Drive to upload file
-            const ok = await Utils.confirm(`Backup file generated ("${filename}"). Would you like to open Google Drive to upload it to your cloud storage?`);
+            const ok = await Utils.confirm(`Backup file downloaded ("${filename}"). Open Google Drive to upload it manually?`);
             if (ok) {
                 window.open('https://drive.google.com/drive/u/0/my-drive', '_blank');
             }
         } catch (e) {
             Utils.hideLoading();
-            Utils.showToast('Google Drive backup error: ' + e.message, 'error');
+            Utils.showToast('Backup download failed: ' + e.message, 'error');
         }
     },
+
+    async exportToGoogleDrive() { return this.downloadBackupForDrive(); },
 
     async restoreFromFile(file, passphraseInput = null) {
         if (!file) return;

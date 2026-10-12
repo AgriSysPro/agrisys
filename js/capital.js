@@ -335,34 +335,67 @@ const BankAccounts = {
     },
 
     // ── Add Transaction ──
-    showAddTransaction() {
+    async showAddTransaction() {
         document.getElementById('tx-date').value = Utils.todayISO();
         document.getElementById('tx-amount').value = '';
         document.getElementById('tx-desc').value = '';
-        this.populateAccountSelect();
+        await this.populateAccountSelect();
+        const offset = document.getElementById('tx-offset-account');
+        offset.innerHTML = '<option value="">Select offset account</option>' + Journal.accounts.map(account =>
+            `<option value="${Utils.escapeHTML(account)}">${Utils.escapeHTML(account)}</option>`
+        ).join('');
+        document.getElementById('tx-type').value = 'deposit';
+        offset.value = 'Other Income';
         Utils.showModal('tx-modal');
     },
 
     async populateAccountSelect() {
         const accounts = await DB.getAll('capital_accounts');
         const sel = document.getElementById('tx-account');
-        sel.innerHTML = accounts.map(a => `<option value="${Utils.escapeHTML(a.id)}">${Utils.escapeHTML(a.name)}</option>`).join('');
+        sel.innerHTML = '<option value="">Select account</option>' + accounts.map(a => `<option value="${Utils.escapeHTML(a.id)}">${Utils.escapeHTML(a.name)}</option>`).join('');
     },
 
     async saveTransaction() {
         const amount = Utils.pf(document.getElementById('tx-amount').value);
-        if (amount <= 0) { Utils.showToast('Amount required', 'error'); return; }
-        await DB.put('capital_transactions', {
-            id: Utils.generateId(),
-            accountId: document.getElementById('tx-account').value,
-            type: document.getElementById('tx-type').value,
-            amount, date: document.getElementById('tx-date').value,
-            description: document.getElementById('tx-desc').value.trim(),
-            isReconciled: false,
+        const accountId = document.getElementById('tx-account').value;
+        const type = document.getElementById('tx-type').value;
+        const offsetAccount = document.getElementById('tx-offset-account').value;
+        const date = document.getElementById('tx-date').value;
+        const description = document.getElementById('tx-desc').value.trim();
+        if (!accountId || !date || amount <= 0) { Utils.showToast('Select an account and date, and enter an amount greater than zero.', 'error'); return; }
+        if (!Journal.accounts.includes(offsetAccount)) { Utils.showToast('Select a valid offset account.', 'error'); return; }
+
+        const account = await DB.get('capital_accounts', accountId);
+        if (!account) { Utils.showToast('Selected cash/bank account no longer exists.', 'error'); return; }
+        const snapshot = await DB.financialSnapshot();
+        const txId = Utils.generateId();
+        const journalId = `JV-${Utils.generateId()}`;
+        const value = Utils.roundCurrency(amount);
+        const memo = description || `${type === 'deposit' ? 'Deposit' : 'Withdrawal'}: ${offsetAccount}`;
+        const transaction = {
+            id: txId, accountId, type, amount: value, date, description: memo,
+            isReconciled: false, journalEntryId: journalId,
+            sourceStore: 'journal_entries', sourceId: journalId,
             createdAt: new Date().toISOString()
-        });
+        };
+        const journal = {
+            id: journalId, date, description: memo,
+            debitAccount: type === 'deposit' ? 'Cash / Bank' : offsetAccount,
+            creditAccount: type === 'deposit' ? offsetAccount : 'Cash / Bank',
+            debitAccountId: type === 'deposit' ? accountId : null,
+            creditAccountId: type === 'withdrawal' ? accountId : null,
+            cashPosted: true, sourceStore: 'capital_transactions', sourceId: txId,
+            amount: value, created_at: new Date().toISOString()
+        };
+        const ops = [
+            { storeName: 'capital_transactions', action: 'add', data: transaction },
+            { storeName: 'journal_entries', action: 'add', data: journal },
+            { storeName: 'audit_logs', action: 'add', data: Utils.createAuditRecord('create', 'bank_account_transaction', txId, { accountId, type, amount: value, offsetAccount, journalId }) }
+        ];
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.message || 'Could not save transaction.', 'error'); return; }
         Utils.hideModal('tx-modal');
-        Utils.showToast('Transaction saved!');
+        Utils.showToast('Transaction and accounting entry saved!');
         this.render();
     },
 
@@ -473,19 +506,27 @@ const BankAccounts = {
 
     // ── Delete Transaction ──
     async deleteTx(id) {
-        const linked = await DB.get('capital_transactions', id);
-        if (linked && (linked.sourceStore || linked.referenceId)) { Utils.showToast('Edit or delete this payment in its originating screen to reverse it safely.', 'warning'); return; }
-        if (!await Utils.confirm('Delete this transaction?')) return;
-        const ops = [];
         const tx = await DB.get('capital_transactions', id);
-        if (tx) ops.push({ storeName: 'capital_transactions', action: 'delete', key: id, softDelete: true, data: tx });
-
-        if (tx && tx.transferId) {
-            const allTx = await DB.getAll('capital_transactions');
-            const linked = allTx.filter(t => t.transferId === tx.transferId && t.id !== id);
-            for (const lt of linked) ops.push({ storeName: 'capital_transactions', action: 'delete', key: lt.id, softDelete: true, data: lt });
+        if (!tx) return;
+        const standalone = tx.sourceStore === 'journal_entries' && !!tx.journalEntryId;
+        if ((tx.sourceStore || tx.referenceId) && !standalone && !tx.transferId) { Utils.showToast('Edit or delete this payment in its originating screen to reverse it safely.', 'warning'); return; }
+        if (!await Utils.confirm('Delete this transaction and its linked accounting entry?')) return;
+        const snapshot = await DB.financialSnapshot();
+        const ops = [{ storeName: 'capital_transactions', action: 'delete', key: id, softDelete: true, data: tx }];
+        if (standalone) {
+            const journals = await DB.getAll('journal_entries');
+            const journal = journals.find(entry => entry.id === tx.journalEntryId || (entry.sourceStore === 'capital_transactions' && entry.sourceId === tx.id));
+            if (journal) ops.push({ storeName: 'journal_entries', action: 'delete', key: journal.id, softDelete: true, data: journal });
         }
-        await DB.commitUnitOfWork(ops);
+        if (tx.transferId) {
+            const allTx = await DB.getAll('capital_transactions');
+            for (const linked of allTx.filter(item => item.transferId === tx.transferId && item.id !== id)) {
+                ops.push({ storeName: 'capital_transactions', action: 'delete', key: linked.id, softDelete: true, data: linked });
+            }
+        }
+        ops.push({ storeName: 'audit_logs', action: 'add', data: Utils.createAuditRecord('delete', 'bank_account_transaction', tx.id, { journalEntryId: tx.journalEntryId || null }) });
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.message || 'Could not delete transaction.', 'error'); return; }
         Utils.showToast('Deleted!');
         this.render();
     },

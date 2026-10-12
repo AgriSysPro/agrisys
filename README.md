@@ -11,6 +11,7 @@ AgriSys is a premium, offline-first management application designed for agricult
 - **Financial Ledgers:** Automated bookkeeping for Farmers and Buyers. Track outstanding balances and advances in real-time.
 - **Professional PDF Receipts:** Generate and print high-quality PDF receipts for every transaction using a custom vector engine.
 - **Offline Reliability:** Powered by IndexedDB for local data persistence. Your data stays on your machine.
+- **Backups:** Optional encrypted local snapshots and downloadable full backups. Google Drive upload is a manual step; AgriSys does not sync to cloud storage automatically.
 - **Premium UI/UX:** Modern, dark-themed dashboard with responsive design and interactive charts.
 - **Localization:** Supports Pakistani PKR currency formatting (e.g., `1,25,000.00`) and Urdu digits for specific reports.
 
@@ -41,7 +42,7 @@ AgriSys is a premium, offline-first management application designed for agricult
 - `/js`: Core application logic (Database, UI modules, Utilities).
 - `/css`: Custom styles and design system.
 - `index.html`: The main entry point of the application.
-- `firebase.json`: Configuration for optional Firebase hosting/sync.
+- `audit/`: Historical bug reviews and fix reports.
 
 ## 📄 License
 

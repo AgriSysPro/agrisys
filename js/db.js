@@ -338,7 +338,7 @@ const DB = {
 
     // Capture source records for optimistic validation inside the eventual write transaction.
     async financialSnapshot() {
-        const names = ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'stock_adjustments', 'capital_accounts', 'capital_transactions', 'journal_entries', 'capital_entries', 'partner_transactions', 'partners', 'company_debts', 'expenses', 'opening_balance_payments'];
+        const names = ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'stock_adjustments', 'capital_accounts', 'capital_transactions', 'journal_entries', 'capital_entries', 'partner_transactions', 'partners', 'company_debts', 'expenses', 'opening_balance_payments', 'farmers', 'buyers'];
         return Object.fromEntries(await Promise.all(names.map(async name => [name, await this.getAll(name)])));
     },
 
@@ -348,6 +348,8 @@ const DB = {
         const dependencyGroups = [
             ['purchases', 'sales', 'stock_adjustments'],
             ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments', 'company_debts'],
+            ['farmers', 'purchases', 'purchase_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments'],
+            ['buyers', 'sales', 'sale_payments', 'opening_balances', 'opening_balance_payments'],
             ['partners', 'partner_transactions']
         ];
         const getKey = row => row?.id ?? row?.key ?? row?.crop ?? row?.seasonId;
@@ -359,8 +361,10 @@ const DB = {
             const key = op.key ?? getKey(op.data);
             if (key !== undefined) addScope(op.storeName, record => getKey(record) === key);
             if (row?.crop) addScope(op.storeName, record => (record.crop || '').trim().toLowerCase() === row.crop.trim().toLowerCase());
-            const names = [row?.farmerName, row?.buyerName, row?.partyName, row?.personName].filter(Boolean).map(name => name.trim().toLowerCase());
+            const names = [row?.farmerName, row?.buyerName, row?.partyName, row?.personName,
+                ['farmers', 'buyers'].includes(op.storeName) ? row?.name : null].filter(Boolean).map(name => name.trim().toLowerCase());
             if (names.length) addScope(op.storeName, record => [record.farmerName, record.buyerName, record.partyName, record.personName].some(name => name && names.includes(name.trim().toLowerCase())));
+            if (['farmers', 'buyers'].includes(op.storeName) && row?.name) addScope(op.storeName, record => (record.name || '').trim().toLowerCase() === row.name.trim().toLowerCase());
         }
         for (const group of dependencyGroups) {
             if (!group.some(name => operationStores.has(name))) continue;
@@ -374,12 +378,19 @@ const DB = {
                     if (row?.crop) crops.add(row.crop.trim().toLowerCase());
                     if (row?.partnerId) partnerIds.add(row.partnerId);
                     if (op.storeName === 'partners' && row?.id) partnerIds.add(row.id);
-                    for (const name of [row?.farmerName, row?.buyerName, row?.partyName, row?.personName]) if (name) parties.add(name.trim().toLowerCase());
+                    for (const name of [row?.farmerName, row?.buyerName, row?.partyName, row?.personName,
+                        ['farmers', 'buyers'].includes(op.storeName) ? row?.name : null]) if (name) parties.add(name.trim().toLowerCase());
                 }
             }
             for (const name of group) {
                 if (group.includes('stock_adjustments') && crops.size) addScope(name, row => crops.has((row.crop || '').trim().toLowerCase()));
                 if (group.includes('farmer_advances') && parties.size) addScope(name, row => [row.farmerName, row.buyerName, row.partyName, row.personName].some(value => value && parties.has(value.trim().toLowerCase())));
+                if (group.includes('farmers') && parties.size) addScope(name, row => name === 'farmers'
+                    ? parties.has((row.name || '').trim().toLowerCase())
+                    : [row.farmerName, row.partyName].some(value => value && parties.has(value.trim().toLowerCase()) && (!row.type || row.type.startsWith('farmer_'))));
+                if (group.includes('buyers') && parties.size) addScope(name, row => name === 'buyers'
+                    ? parties.has((row.name || '').trim().toLowerCase())
+                    : [row.buyerName, row.partyName].some(value => value && parties.has(value.trim().toLowerCase()) && (!row.type || row.type.startsWith('buyer_'))));
                 if (group.includes('partners') && partnerIds.size) addScope(name, row => name === 'partners' ? partnerIds.has(row.id) : partnerIds.has(row.partnerId));
             }
         }

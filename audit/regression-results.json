@@ -192,6 +192,22 @@
     {
       "name": "Capital contribution and bank movement save atomically",
       "status": "PASS"
+    },
+    {
+      "name": "Standalone bank entry posts a balanced journal atomically and reverses both together",
+      "status": "PASS"
+    },
+    {
+      "name": "Failed farmer advance commit creates neither master nor cash records",
+      "status": "PASS"
+    },
+    {
+      "name": "Party profiles with ledger history cannot be deleted",
+      "status": "PASS"
+    },
+    {
+      "name": "Full Excel backup contains historical payment events and computed bank balances without secrets",
+      "status": "PASS"
     }
   ]
 }

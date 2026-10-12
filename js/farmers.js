@@ -138,37 +138,31 @@ const Farmers = {
 
         if (!farmerName) { Utils.showToast('Select a farmer', 'error'); return; }
         if (amount <= 0) { Utils.showToast('Enter a valid amount', 'error'); return; }
-        if (!accountId) { Utils.showToast('Select cash/bank account for this advance', 'error'); return; }
+        if (!accountId || !date) { Utils.showToast('Select cash/bank account and date for this advance', 'error'); return; }
 
-        await this.ensureFarmer(farmerName);
-
-        // Save advance
+        const snapshot = await DB.financialSnapshot();
+        const account = await DB.get('capital_accounts', accountId);
+        if (!account) { Utils.showToast('Selected cash/bank account no longer exists.', 'error'); return; }
+        const farmers = await DB.getAll('farmers');
+        const existing = farmers.find(f => (f.name || '').trim().toLowerCase() === farmerName.toLowerCase());
         const advId = Utils.generateId();
-        await DB.put('farmer_advances', {
-            id: advId, farmerName, amount, date, notes, createdAt: new Date().toISOString()
-        });
-
-        const tx = await Utils.createLinkedCapitalTx({
-            accountId,
-            type: 'withdrawal',
-            amount,
-            date,
+        const capitalTxId = Utils.generateId();
+        const createdAt = new Date().toISOString();
+        const advance = { id: advId, farmerName, amount: Utils.roundCurrency(amount), date, notes, accountId, capitalTxId, createdAt };
+        const capitalTx = {
+            id: capitalTxId, accountId, type: 'withdrawal', amount: advance.amount, date,
             description: `Advance paid to ${farmerName}` + (notes ? ` - ${notes}` : ''),
-            sourceStore: 'farmer_advances',
-            sourceId: advId
-        });
-        if (tx) {
-            const adv = await DB.get('farmer_advances', advId);
-            adv.capitalTxId = tx.id;
-            adv.accountId = accountId;
-            await DB.put('farmer_advances', adv);
-        }
-        await Utils.audit('create', 'farmer_advance', advId, {
-            farmerName,
-            amount,
-            accountId: accountId || null,
-            capitalTxId: tx ? tx.id : null
-        });
+            sourceStore: 'farmer_advances', sourceId: advId, isReconciled: false, createdAt
+        };
+        const ops = [];
+        if (!existing) ops.push({ storeName: 'farmers', action: 'add', data: { id: Utils.generateId(), name: farmerName, phone: '', address: '', notes: '', createdAt } });
+        ops.push(
+            { storeName: 'farmer_advances', action: 'add', data: advance },
+            { storeName: 'capital_transactions', action: 'add', data: capitalTx },
+            { storeName: 'audit_logs', action: 'add', data: Utils.createAuditRecord('create', 'farmer_advance', advId, { farmerName, amount: advance.amount, accountId, capitalTxId }) }
+        );
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.message || 'Could not save farmer advance.', 'error'); return; }
 
         Utils.hideModal('advance-modal');
         Utils.showToast('Advance recorded successfully!');
@@ -178,18 +172,20 @@ const Farmers = {
     async delete(id) {
         const farmer = await DB.get('farmers', id);
         if (!farmer) return;
-
-        // Check for associated purchases
-        const purchases = await DB.getAll('purchases');
-        const linked = purchases.filter(p => p.farmerName.toLowerCase() === farmer.name.toLowerCase());
-
-        let msg = 'Delete this farmer?';
-        if (linked.length > 0) {
-            msg = `This farmer has ${linked.length} linked purchase(s). Only the farmer record will be deleted — purchases will be preserved. Continue?`;
-        }
-
-        if (!await Utils.confirm(msg)) return;
-        await DB.delete('farmers', id);
+        const name = (farmer.name || '').trim().toLowerCase();
+        const sources = ['purchases', 'purchase_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments'];
+        const linked = (await Promise.all(sources.map(store => DB.getAll(store)))).flat().filter(row => {
+            const party = (row.farmerName || row.partyName || '').trim().toLowerCase();
+            return party === name && (!row.type || row.type.startsWith('farmer_'));
+        });
+        if (linked.length) { Utils.showToast('This farmer has financial history and cannot be deleted. Keep the profile so its ledgers remain connected.', 'warning'); return; }
+        if (!await Utils.confirm('Delete this farmer?')) return;
+        const snapshot = await DB.financialSnapshot();
+        try { await DB.commitUnitOfWork([
+            { storeName: 'farmers', action: 'delete', key: id, softDelete: true, data: farmer },
+            { storeName: 'audit_logs', action: 'add', data: Utils.createAuditRecord('delete', 'farmer', id, { name: farmer.name }) }
+        ], snapshot); }
+        catch (error) { Utils.showToast(error.message || 'Could not delete farmer.', 'error'); return; }
         Utils.showToast('Farmer deleted!');
         this.render();
     },
