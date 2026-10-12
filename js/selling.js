@@ -294,10 +294,10 @@ const Selling = {
         const snapshot = await DB.financialSnapshot();
         if (!this.editingId) document.getElementById('s-id').value = await Utils.getNextReceiptId('sale');
         const d = this.getData();
-        if (!d.buyerName) { Utils.showToast('Buyer name required', 'error'); return; }
-        if (!d.crop) { Utils.showToast('Crop required', 'error'); return; }
-        if (d.grossWeight <= 0) { Utils.showToast('Weight required', 'error'); return; }
-        if (d.rate <= 0) { Utils.showToast('Rate must be greater than 0', 'error'); return; }
+        if (!d.buyerName) return Utils.markInvalid('s-buyer', 'Buyer name is required');
+        if (!d.crop) return Utils.markInvalid('s-crop', 'Crop is required');
+        if (d.grossWeight <= 0) return Utils.markInvalid('s-weight', 'Weight must be greater than 0');
+        if (d.rate <= 0) return Utils.markInvalid('s-rate', 'Rate must be greater than 0');
         if (d.amountReceived < 0) { Utils.showToast('Received amount cannot be negative', 'error'); return; }
         if (d.amountReceived > d.amount) { Utils.showToast('Received amount cannot exceed sale amount', 'error'); return; }
         const linkedReceipts = await Utils.getInvoicePayments('sale_payments', 'saleId', d.id);

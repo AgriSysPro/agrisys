@@ -78,7 +78,7 @@ const PurchasePayments = {
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="PurchasePayments.shareWhatsApp('${p.id}')" title="Share via WhatsApp">📱</button>
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="PurchasePayments.printPayment('${p.id}')" title="Print PDF Voucher">📄</button>
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="PurchasePayments.editPayment('${p.id}')" title="Edit">✏️</button>
-                <button class="btn btn-icon btn-danger btn-sm" onclick="PurchasePayments.deletePayment('${p.id}')" title="Delete">×</button>
+                <button class="btn btn-icon btn-danger btn-sm" onclick="PurchasePayments.deletePayment('${p.id}')" title="Delete" aria-label="Delete farmer payment">×</button>
             </div></td>
         </tr>`).join('') || '<tr><td colspan="8" class="text-center" style="color:var(--text-muted)">No payment history</td></tr>';
     },
@@ -140,7 +140,12 @@ const PurchasePayments = {
 
     async showDirectPaymentModal() {
         PaymentService.activate('farmer');
+        PaymentService.openingSettlement = false;
         document.getElementById('dpay-title').textContent = 'General Farmer Payment / Advance Settlement';
+        document.getElementById('dpay-amount-label').innerHTML = 'Payment Amount (PKR) <span class="required">*</span>';
+        document.getElementById('dpay-save-btn').textContent = 'Record Payment';
+        document.getElementById('dpay-amount-label').textContent = 'Payment Amount (PKR)';
+        document.getElementById('dpay-save-btn').textContent = 'Record Payment';
         document.getElementById('dpay-party-label').textContent = 'Select Farmer Name *';
         document.getElementById('dpay-receipt-id').value = await Utils.getNextReceiptId('payment');
         document.getElementById('dpay-party-name').value = '';

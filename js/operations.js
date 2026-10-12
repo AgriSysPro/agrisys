@@ -24,8 +24,8 @@ const OpeningBalances = {
             <td>${Utils.statusBadge(status)}</td>
             <td>${Utils.escapeHTML(b.notes || '-')}</td>
             <td><div class="table-actions">
-                ${canSettle ? `<button class="btn btn-icon btn-success btn-sm" onclick="OpeningBalances.settle('${b.id}')" title="Settle">PKR</button>` : ''}
-                <button class="btn btn-icon btn-danger btn-sm" onclick="OpeningBalances.delete('${b.id}')" title="Delete">x</button>
+                ${canSettle ? `<button class="btn btn-icon btn-success btn-sm" onclick="OpeningBalances.settle('${b.id}')" title="Settle" aria-label="Settle opening balance">PKR</button>` : ''}
+                <button class="btn btn-icon btn-danger btn-sm" onclick="OpeningBalances.delete('${b.id}')" title="Delete" aria-label="Delete opening balance">×</button>
             </div></td>
         </tr>`;
         }).join('') || '<tr><td colspan="11" class="text-center" style="color:var(--text-muted)">No opening balances</td></tr>';
@@ -104,11 +104,12 @@ const OpeningBalances = {
             notes: document.getElementById('ob-notes').value.trim(),
             createdAt: new Date().toISOString()
         };
-        if (amount <= 0) { Utils.showToast('Amount is required', 'error'); return; }
-        if (type === 'stock' && (!data.crop || weight <= 0)) { Utils.showToast('Crop and stock weight are required', 'error'); return; }
-        if (type === 'capital' && !data.accountId) { Utils.showToast('Select a capital account', 'error'); return; }
+        if (amount <= 0) return Utils.markInvalid('ob-amount', 'Amount is required');
+        if (type === 'stock' && !data.crop) return Utils.markInvalid('ob-crop', 'Crop is required');
+        if (type === 'stock' && weight <= 0) return Utils.markInvalid('ob-weight', 'Stock weight is required');
+        if (type === 'capital' && !data.accountId) return Utils.markInvalid('ob-account', 'Select a capital account');
         if (['farmer_payable', 'buyer_receivable', 'farmer_advance', 'buyer_advance'].includes(type) && !data.partyName) {
-            Utils.showToast('Party name is required', 'error'); return;
+            return Utils.markInvalid('ob-party', 'Party name is required');
         }
 
         const ops = [];
@@ -211,11 +212,21 @@ const OpeningBalances = {
         if (balance <= 0) { Utils.showToast('Opening balance is already settled', 'warning'); return; }
 
         const isFarmer = b.type === 'farmer_payable';
+        PaymentService.openingSettlement = true;
+        document.getElementById('pay-advance-box').style.display = 'none';
+        document.getElementById('pay-deduct-advance').value = '0';
+        document.getElementById('pay-sum-adv-row').style.display = 'none';
+        document.getElementById('pay-sum-total-label').textContent = isFarmer ? 'Opening Payment Amount' : 'Opening Receipt Amount';
+        document.getElementById('pay-sum-net-label').textContent = isFarmer ? 'Net Cash/Bank Payout' : 'Net Cash/Bank Receipt';
+        document.getElementById('pay-amount-label').textContent = isFarmer ? 'Opening Payment Amount' : 'Opening Receipt Amount';
+        document.getElementById('pay-save-btn').textContent = isFarmer ? 'Record Opening Payment' : 'Record Opening Receipt';
         document.getElementById('pay-modal-title').textContent = isFarmer
             ? `Pay Opening Farmer Balance: ${b.partyName}`
             : `Receive Opening Buyer Balance: ${b.partyName}`;
         document.getElementById('pay-receipt-id').value = await Utils.getNextReceiptId('payment');
         document.getElementById('pay-amount').value = balance.toFixed(2);
+        document.getElementById('pay-sum-total').textContent = `PKR ${Utils.formatPKR(balance)}`;
+        document.getElementById('pay-sum-net').textContent = `PKR ${Utils.formatPKR(balance)}`;
         document.getElementById('pay-amount').max = balance;
         document.getElementById('pay-date').value = Utils.todayISO();
         document.getElementById('pay-mode').value = 'cash';
@@ -289,6 +300,7 @@ const OpeningBalances = {
             catch (error) { Utils.showToast(error.code === 'CONFLICT' ? 'Opening balance changed in another tab. Refresh and retry.' : error.message, 'error'); return; }
             await Utils.confirmReceiptId('payment', receiptNo);
             Utils.hideModal('payment-modal');
+            PaymentService.openingSettlement = false;
             Utils.showToast(isFarmer ? 'Opening payment recorded!' : 'Opening receipt recorded!');
             if (printAfterSave) await ReceiptPDF.generatePaymentVoucher(payment, current, isFarmer ? 'farmer' : 'buyer');
             this.render();
@@ -473,18 +485,20 @@ const StockAdjustments = {
             <td>${Utils.escapeHTML(a.reason || '-')}</td>
             <td class="text-right font-bold">${Utils.formatNum(a.weight, 2)} KG</td>
             <td class="text-right">PKR ${Utils.formatPKR(a.value || 0)}</td>
-            <td><button class="btn btn-icon btn-danger btn-sm" onclick="StockAdjustments.delete('${a.id}')" title="Delete">×</button></td>
+            <td><button class="btn btn-icon btn-danger btn-sm" onclick="StockAdjustments.delete('${a.id}')" title="Delete" aria-label="Delete stock adjustment">×</button></td>
         </tr>`).join('') || '<tr><td colspan="7" class="text-center" style="color:var(--text-muted)">No stock adjustments recorded</td></tr>';
     },
 
     async showModal() {
         document.getElementById('sa-date').value = Utils.todayISO();
         
-        // Populate crop select from purchases and sales
-        const purchases = await DB.getAll('purchases');
-        const sales = await DB.getAll('sales');
-        const adjs = await DB.getAll('stock_adjustments');
-        const crops = [...new Set([...purchases.map(p => p.crop), ...sales.map(s => s.crop), ...adjs.map(a => a.crop)].filter(Boolean))].sort();
+        // Keep the crop choices consistent with the active-season stock badge.
+        const activeSeason = await Utils.getActiveSeason();
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
+        const adjs = Utils.filterBySeason(await DB.getAll('stock_adjustments'), activeSeason);
+        const configuredCrops = await Settings.getCrops();
+        const crops = [...new Set([...configuredCrops, ...purchases.map(p => p.crop), ...sales.map(s => s.crop), ...adjs.map(a => a.crop)].filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
         const saCropSelect = document.getElementById('sa-crop');
         saCropSelect.innerHTML = `<option value="">Select Crop</option>` + crops.map(c => `<option value="${Utils.escapeHTML(c)}">${Utils.escapeHTML(c)}</option>`).join('');
@@ -563,8 +577,8 @@ const StockAdjustments = {
             notes: document.getElementById('sa-notes').value.trim(),
             createdAt: new Date().toISOString()
         };
-        if (!data.crop) { Utils.showToast('Crop is required', 'error'); return; }
-        if (data.weight <= 0) { Utils.showToast('Adjustment weight is required', 'error'); return; }
+        if (!data.crop) return Utils.markInvalid('sa-crop', 'Crop is required');
+        if (data.weight <= 0) return Utils.markInvalid('sa-weight', 'Adjustment weight is required');
 
         const ops = [];
         ops.push({ storeName: 'stock_adjustments', action: 'put', data });
@@ -908,7 +922,9 @@ const FinanceReports = {
         if (!sel) return;
         const current = sel.value;
         const accounts = [...new Set(entries.map(e => e.account))].sort();
-        sel.innerHTML = accounts.map(a => `<option value="${Utils.escapeHTML(a)}">${Utils.escapeHTML(a)}</option>`).join('');
+        if (current && !accounts.includes(current)) accounts.push(current);
+        accounts.sort();
+        sel.innerHTML = accounts.map(a => `<option value="${Utils.escapeHTML(a)}">${Utils.escapeHTML(a)}${current === a && !entries.some(e => e.account === a) ? ' (no entries through selected date)' : ''}</option>`).join('');
         if (current && accounts.includes(current)) sel.value = current;
     },
 
@@ -924,7 +940,7 @@ const FinanceReports = {
             .filter(e => from && e.date < from)
             .reduce((s, e) => s + (e.debit || 0) - (e.credit || 0), 0);
         const periodRows = accountEntries.filter(e => (!from || e.date >= from) && (!to || e.date <= to));
-        const rows = [{
+        const rows = accountEntries.length ? [{
             date: '',
             description: from ? 'Balance Brought Forward' : 'Opening Balance',
             debit: 0,
@@ -933,7 +949,7 @@ const FinanceReports = {
         }].concat(periodRows.map(e => {
             balance += (e.debit || 0) - (e.credit || 0);
             return { ...e, balance };
-        }));
+        })) : [];
         const debit = rows.filter(r => r.date).reduce((s, r) => s + (r.debit || 0), 0);
         const credit = rows.filter(r => r.date).reduce((s, r) => s + (r.credit || 0), 0);
         document.getElementById('general-ledger-stats').innerHTML = `

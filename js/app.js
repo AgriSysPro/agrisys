@@ -9,6 +9,8 @@ const App = {
                 await CoreServices.runMaterializedViewMigrations();
             }
             const hasBusiness = await Settings.init();
+            const footerYear = document.getElementById('footer-year');
+            if (footerYear) footerYear.textContent = new Date().getFullYear();
             
             // Check for first-time visit
             if (!hasBusiness) {
@@ -25,6 +27,8 @@ const App = {
             await this.populateExpenseTypeSelect();
             this.setupHashRouter();
             this.setupKeyboardShortcuts();
+            document.addEventListener('input', e => Utils.clearInvalid(e.target));
+            document.addEventListener('change', e => Utils.clearInvalid(e.target));
             this.setupSyncListener();
             Utils.safeCreateIcons();
 
@@ -131,7 +135,14 @@ const App = {
             case 'cash-book': await FinanceReports.renderCashBook(); break;
             case 'trial-balance': await FinanceReports.renderTrialBalance(); break;
             case 'general-ledger': await FinanceReports.renderGeneralLedger(); break;
-            case 'reports': break;
+            case 'reports': {
+                const from = document.getElementById('rp-from');
+                const to = document.getElementById('rp-to');
+                if (from && !from.value) from.value = Utils.dateToISO(new Date(new Date().getFullYear(), 0, 1));
+                if (to && !to.value) to.value = Utils.todayISO();
+                await Reports.generate();
+                break;
+            }
             case 'aging-reports': await AgingReports.render(); break;
             case 'settings':
                 if (typeof SeasonManager !== 'undefined') await SeasonManager.renderSettings();
@@ -162,6 +173,31 @@ const App = {
 
     setupKeyboardShortcuts() {
         document.addEventListener('keydown', (e) => {
+            const target = e.target;
+            const isTyping = target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+
+            // Ctrl+Enter is the one shortcut intentionally available during form entry.
+            if (isTyping && e.ctrlKey && e.key === 'Enter') {
+                if (this.currentSection === 'purchasing') { e.preventDefault(); Purchasing.save(); }
+                else if (this.currentSection === 'selling') { e.preventDefault(); Selling.save(); }
+                return;
+            }
+
+            // Escape closes only the topmost modal, even when focus is in a field.
+            if (e.key === 'Escape') {
+                const activeModals = document.querySelectorAll('.modal-overlay.active');
+                const topModal = [...activeModals].sort((a, b) => (Number(a.style.zIndex) || 200) - (Number(b.style.zIndex) || 200)).at(-1);
+                if (topModal) {
+                    Utils.hideModal(topModal.id);
+                } else if (!isTyping) {
+                    this.navigate('dashboard');
+                }
+                return;
+            }
+
+            // Navigation keys should not interrupt data entry or editable content.
+            if (isTyping) return;
+
             // Mandi speed shortcuts
             if (e.key === 'F1' || (e.altKey && (e.key === 'd' || e.key === 'D'))) { e.preventDefault(); this.navigate('dashboard'); }
             else if (e.key === 'F2' || (e.altKey && (e.key === 'p' || e.key === 'P'))) { e.preventDefault(); this.navigate('purchasing'); }
@@ -171,37 +207,12 @@ const App = {
             else if (e.key === 'F7' || (e.altKey && (e.key === 'j' || e.key === 'J'))) { e.preventDefault(); this.navigate('bookkeeping'); }
             else if (e.key === 'F8' || (e.altKey && (e.key === 'r' || e.key === 'R'))) { e.preventDefault(); this.navigate('reports'); }
 
-            // Ctrl+Enter inside forms to save
-            if (e.ctrlKey && e.key === 'Enter') {
-                if (this.currentSection === 'purchasing') { e.preventDefault(); Purchasing.save(); }
-                else if (this.currentSection === 'selling') { e.preventDefault(); Selling.save(); }
-            }
-
-            // Don't trigger standard shortcuts when typing in inputs
-            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
-                if (e.key === 'Escape') e.target.blur();
-                return;
-            }
-
             if (e.ctrlKey && e.key === 'n') {
                 e.preventDefault();
                 if (e.shiftKey) {
                     this.navigate('selling');
                 } else {
                     this.navigate('purchasing');
-                }
-            }
-            if (e.key === 'Escape') {
-                // Close any open modal
-                let closedModal = false;
-                document.querySelectorAll('.modal-overlay.active').forEach(m => {
-                    m.classList.remove('active');
-                    document.body.style.overflow = '';
-                    closedModal = true;
-                });
-                // Navigate to dashboard if no modal was closed
-                if (!closedModal) {
-                    this.navigate('dashboard');
                 }
             }
         });

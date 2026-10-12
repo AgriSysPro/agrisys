@@ -110,7 +110,7 @@
                 <i data-lucide="settings"></i> Settings
             </div>
         </nav>
-        <div class="sidebar-footer">AgriSys v2.0 &copy; 2024</div>
+        <div class="sidebar-footer">AgriSys &copy; <span id="footer-year"></span></div>
     </aside>
 
     <!-- Main Content -->
@@ -366,7 +366,7 @@
                 <hr class="divider">
                 <h3 class="section-heading">Weight & Rate</h3>
                 <div class="form-grid">
-                    <div class="form-group"><label class="form-label">Gross Net Weight (KG) <span class="required">*</span></label><input class="form-input" type="number" id="s-weight" step="0.01" placeholder="0.00" oninput="Selling.calculate()"></div>
+                    <div class="form-group"><label class="form-label">Gross Weight (KG) <span class="required">*</span></label><input class="form-input" type="number" id="s-weight" step="0.01" placeholder="0.00" oninput="Selling.calculate()"></div>
                     <div class="form-group"><label class="form-label">Per Bag Weight (KG)</label><input class="form-input" type="number" id="s-per-bag" step="0.01" value="100" oninput="Selling.calculate()"></div>
                     <div class="form-group"><label class="form-label">Bags (Auto)</label><div class="computed-value" id="s-bags-display">0</div></div>
                 </div>
@@ -788,7 +788,7 @@
         <!-- ===== CASH BOOK ===== -->
         <div class="section" id="sec-cash-book">
             <div class="page-header">
-                <div><h1 class="page-title">Cash Book</h1><p class="page-title-sub">Account-wise deposits, withdrawals, and running balance</p></div>
+                <div><h1 class="page-title">Cash Book</h1><p class="page-title-sub">Select an account for its running balance; All Accounts shows an aggregate balance.</p></div>
                 <div class="page-actions"><button class="btn btn-ghost" onclick="FinanceReports.exportCashBook()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
             </div>
             <div class="filter-bar">
@@ -869,7 +869,7 @@
                 <button class="btn btn-ghost btn-sm" onclick="Utils.applyDatePreset('this-year','rp-from','rp-to',()=>Reports.generate())">This Year</button>
                 <button class="btn btn-ghost btn-sm" onclick="Utils.applyDatePreset('last-year','rp-from','rp-to',()=>Reports.generate())">Last Year</button>
             </div>
-            <div id="report-content"></div>
+            <div id="report-content"><div class="empty-state">Choose a date range and generate a report.</div></div>
         </div>
 
         <!-- Ledger Date Filter Modal -->
@@ -1131,7 +1131,7 @@
 
             <div class="form-grid">
                 <div class="form-group"><label class="form-label">Receipt No</label><input class="form-input" id="pay-receipt-id" readonly></div>
-                <div class="form-group"><label class="form-label">Total Payment Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01" oninput="PaymentService.onTotalsInput()"></div>
+                <div class="form-group"><label class="form-label" id="pay-amount-label">Total Payment Amount</label><input class="form-input" type="number" id="pay-amount" step="0.01" oninput="PaymentService.onTotalsInput()"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="pay-date"></div>
                 <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="pay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
                 <div class="form-group"><label class="form-label">Reference</label><input class="form-input" id="pay-ref" placeholder="Reference number..."></div>
@@ -1140,9 +1140,9 @@
             </div>
 
             <div class="summary-box" style="margin-top:16px;">
-                <div class="summary-row"><span class="summary-label">Total Payment Amount</span><span class="summary-value" id="pay-sum-total">PKR 0.00</span></div>
+                <div class="summary-row"><span class="summary-label" id="pay-sum-total-label">Total Payment Amount</span><span class="summary-value" id="pay-sum-total">PKR 0.00</span></div>
                 <div class="summary-row" id="pay-sum-adv-row" style="display:none"><span class="summary-label">Adjusted From Open Advance</span><span class="summary-value" id="pay-sum-adv" style="color:var(--accent-warning)">- PKR 0.00</span></div>
-                <div class="summary-row"><span class="summary-label">Net Cash/Bank Payout/Receipt</span><span class="summary-value font-bold" id="pay-sum-net" style="color:var(--accent-success)">PKR 0.00</span></div>
+                <div class="summary-row"><span class="summary-label" id="pay-sum-net-label">Net Cash/Bank Payout/Receipt</span><span class="summary-value font-bold" id="pay-sum-net" style="color:var(--accent-success)">PKR 0.00</span></div>
             </div>
         </div>
         <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('payment-modal')">Cancel</button><button class="btn btn-primary" id="pay-save-btn">Save Payment</button><button class="btn btn-success" id="pay-save-print-btn">Save & Print</button></div>
@@ -1172,7 +1172,7 @@
 
             <div class="form-grid" style="margin-top:16px;">
                 <div class="form-group"><label class="form-label">Receipt / Voucher No</label><input class="form-input" id="dpay-receipt-id" readonly></div>
-                <div class="form-group"><label class="form-label">Total Payment Amount (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="dpay-amount" step="0.01" placeholder="0.00" oninput="PaymentService.onTotalsInput(true)"></div>
+                <div class="form-group"><label class="form-label" id="dpay-amount-label">Payment Amount (PKR) <span class="required">*</span></label><input class="form-input" type="number" id="dpay-amount" step="0.01" placeholder="0.00" oninput="PaymentService.onTotalsInput(true)"></div>
                 <div class="form-group"><label class="form-label">Adjust Open Advance (PKR)</label><input class="form-input" type="number" id="dpay-deduct-adv" step="0.01" value="0" placeholder="0.00" oninput="PaymentService.onTotalsInput(true)"></div>
                 <div class="form-group"><label class="form-label">Date</label><input class="form-input" type="date" id="dpay-date"></div>
                 <div class="form-group"><label class="form-label">Mode</label><select class="form-select" id="dpay-mode"><option value="cash">Cash</option><option value="bank">Bank Transfer</option><option value="online">Online Transfer</option><option value="cheque">Cheque</option></select></div>
@@ -1479,7 +1479,7 @@
             <input type="hidden" id="partner-edit-id">
             <div class="form-grid">
                 <div class="form-group full-width">
-                    <label class="form-label">Partner Name *</label>
+                    <label class="form-label">Partner Name <span class="required">*</span></label>
                     <input class="form-input" id="partner-input-name" placeholder="e.g. Ali Reza">
                 </div>
                 <div class="form-group">
@@ -1487,7 +1487,7 @@
                     <input class="form-input" id="partner-input-role" placeholder="e.g. Managing Partner, Sleeping Partner" value="Managing Partner">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Profit Share Percentage (%) *</label>
+                    <label class="form-label">Profit Share Percentage (%) <span class="required">*</span></label>
                     <input class="form-input" type="number" id="partner-input-share" placeholder="e.g. 50" step="0.1" min="0" max="100">
                 </div>
                 <div class="form-group">
@@ -1520,7 +1520,7 @@
         <div class="modal-body">
             <div class="form-grid">
                 <div class="form-group full-width">
-                    <label class="form-label">Transaction Type *</label>
+                    <label class="form-label">Transaction Type <span class="required">*</span></label>
                     <select class="form-select" id="partner-tx-type" onchange="PartnersMgmt.onTxTypeChange()">
                         <option value="contribution">Capital Contribution (+ Deposit / Inflow)</option>
                         <option value="drawing">Personal Drawing (− Withdrawal / Outflow)</option>
@@ -1528,15 +1528,15 @@
                     </select>
                 </div>
                 <div class="form-group full-width">
-                    <label class="form-label">Select Partner *</label>
+                    <label class="form-label">Select Partner <span class="required">*</span></label>
                     <select class="form-select" id="partner-tx-partner"></select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Amount (PKR) *</label>
+                    <label class="form-label">Amount (PKR) <span class="required">*</span></label>
                     <input class="form-input" type="number" id="partner-tx-amount" placeholder="0.00" min="1" step="any">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Date *</label>
+                    <label class="form-label">Date <span class="required">*</span></label>
                     <input class="form-input" type="date" id="partner-tx-date">
                 </div>
                 <div class="form-group full-width">

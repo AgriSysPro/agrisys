@@ -59,12 +59,13 @@ const Farmers = {
                 <td class="text-right font-bold" style="color:${openAdv > 0 ? 'var(--accent-warning)' : 'inherit'}">PKR ${Utils.formatPKR(openAdv)}</td>
                 <td class="text-right font-bold" style="color:${balance > 0 ? 'var(--accent-danger)' : 'var(--accent-success)'}">PKR ${Utils.formatPKR(balance)}</td>
                 <td><div class="table-actions">
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.showLedgerOptions('${Utils.escapeHTML(f.id)}')" title="Ledger Options">📊</button>
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.edit('${Utils.escapeHTML(f.id)}')" title="Edit">✏️</button>
-                    <button class="btn btn-icon btn-danger btn-sm" onclick="Farmers.delete('${Utils.escapeHTML(f.id)}')" title="Delete">🗑️</button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.showLedgerOptions('${Utils.escapeHTML(f.id)}')" title="Ledger Options" aria-label="Farmer ledger options"><i data-lucide="book-open"></i></button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Farmers.edit('${Utils.escapeHTML(f.id)}')" title="Edit" aria-label="Edit farmer"><i data-lucide="pencil"></i></button>
+                    <button class="btn btn-icon btn-danger btn-sm" onclick="Farmers.delete('${Utils.escapeHTML(f.id)}')" title="Delete" aria-label="Delete farmer"><i data-lucide="trash-2"></i></button>
                 </div></td>
             </tr>`;
         }).join('');
+        Utils.safeCreateIcons();
     },
 
     showAddModal() {

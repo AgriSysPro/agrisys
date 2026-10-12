@@ -149,9 +149,21 @@ const Reports = {
     },
 
     async generate() {
-        if (this.currentTab === 'pnl') return this.generatePnL();
-        if (this.currentTab === 'bs') return this.generateBalanceSheet();
-        if (this.currentTab === 'cf') return this.generateCashFlow();
+        const from = document.getElementById('rp-from').value;
+        const to = document.getElementById('rp-to').value;
+        if (!to || (this.currentTab !== 'bs' && !from)) {
+            Utils.showToast(this.currentTab === 'bs' ? 'Select end date' : 'Select date range', 'warning');
+            return false;
+        }
+        if (from && to && from > to) {
+            Utils.showToast('Start date must be on or before end date', 'warning');
+            return false;
+        }
+        if (this.currentTab === 'pnl') await this.generatePnL();
+        else if (this.currentTab === 'bs') await this.generateBalanceSheet();
+        else if (this.currentTab === 'cf') await this.generateCashFlow();
+        else return false;
+        return true;
     },
 
     async generatePnL() {
@@ -524,6 +536,7 @@ const Reports = {
     // P&L PDF — Professional Financial Template
     // ═══════════════════════════════════════════════
     async exportPDF() {
+        if (!await this.generate()) return;
         if (this.currentTab === 'bs') return this.exportBalanceSheetPDF();
         if (this.currentTab === 'cf') return this.exportCashFlowPDF();
         return this.exportPnLPDF();
@@ -1246,6 +1259,7 @@ const Reports = {
     // EXCEL EXPORTS
     // ═══════════════════════════════════════════════
     async exportExcel() {
+        if (!await this.generate()) return;
         if (this.currentTab === 'bs') return this.exportBalanceSheetExcel();
         if (this.currentTab === 'cf') return this.exportCashFlowExcel();
         return this.exportPnLExcel();

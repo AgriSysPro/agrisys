@@ -2,6 +2,7 @@
 const PaymentService = {
     activeType: 'farmer',
     busy: false,
+    openingSettlement: false,
     config(type) {
         return type === 'farmer'
             ? { invoices: 'purchases', payments: 'purchase_payments', party: 'farmerName', paid: 'amountPaid', link: 'purchaseId', initial: 'initialPaymentAmount', module: PurchasePayments }
@@ -10,6 +11,12 @@ const PaymentService = {
     activate(type) { this.activeType = type; },
     onPartyInput() { return this.config(this.activeType).module.onDirectPartySelect(); },
     onTotalsInput(direct = false) {
+        if (this.openingSettlement) {
+            const amount = Utils.pf(document.getElementById('pay-amount')?.value);
+            document.getElementById('pay-sum-total').textContent = `PKR ${Utils.formatPKR(amount)}`;
+            document.getElementById('pay-sum-net').textContent = `PKR ${Utils.formatPKR(amount)}`;
+            return;
+        }
         const module = this.config(this.activeType).module;
         return direct ? module.calculateDirectTotals() : module.calculateModalTotals();
     },
@@ -150,6 +157,9 @@ const PaymentService = {
     },
     async openInvoice(type, invoiceId, paymentId = null) {
         this.activate(type);
+        this.openingSettlement = false;
+        document.getElementById('pay-advance-box').style.display = 'none';
+        document.getElementById('pay-deduct-advance').value = '0';
         const c = this.config(type), payment = paymentId ? await DB.get(c.payments, paymentId) : null;
         if (payment && (payment[c.link] === 'General' || (payment.allocations || []).length > 1)) {
             await c.module.showDirectPaymentModal();
@@ -164,7 +174,12 @@ const PaymentService = {
         if (!invoice) return;
         const available = await this.availableAdvance(type, invoice[c.party], paymentId);
         c.module.currentOpenAdvance = available;
-        document.getElementById('pay-modal-title').textContent = `${payment ? 'Edit' : 'Record'} payment: ${invoice[c.party]} (${invoice.id})`;
+        const actionLabel = type === 'farmer' ? 'payment' : 'receipt';
+        document.getElementById('pay-modal-title').textContent = `${payment ? 'Edit' : 'Record'} ${actionLabel}: ${invoice[c.party]} (${invoice.id})`;
+        document.getElementById('pay-amount-label').textContent = type === 'farmer' ? 'Total Payment Amount' : 'Total Receipt Amount';
+        document.getElementById('pay-sum-total-label').textContent = type === 'farmer' ? 'Total Payment Amount' : 'Total Receipt Amount';
+        document.getElementById('pay-sum-net-label').textContent = type === 'farmer' ? 'Net Cash/Bank Payout' : 'Net Cash/Bank Receipt';
+        document.getElementById('pay-save-btn').textContent = type === 'farmer' ? 'Record Payment' : 'Record Receipt';
         document.getElementById('pay-receipt-id').value = payment?.receiptNo || await Utils.getNextReceiptId('payment');
         document.getElementById('pay-amount').value = payment ? (payment.totalPaidCash ?? payment.amount) : Math.max(0, this.total(invoice, type) - (invoice[c.paid] || 0));
         document.getElementById('pay-date').value = payment?.date || Utils.todayISO();

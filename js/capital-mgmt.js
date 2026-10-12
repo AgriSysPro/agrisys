@@ -49,7 +49,7 @@ const CapitalMgmt = {
                 <td>${acc ? Utils.escapeHTML(acc.name) : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td class="text-right font-bold" style="color:${e.type === 'contribution' ? 'var(--accent-success)' : 'var(--accent-danger)'}">${e.type === 'contribution' ? '+' : '−'}PKR ${Utils.formatPKR(e.amount)}</td>
                 <td class="text-right font-bold" style="color:${runBal >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(runBal)}</td>
-                <td><button class="btn btn-icon btn-danger btn-sm" onclick="CapitalMgmt.deleteEntry('${e.id}')">🗑️</button></td>
+                <td><button class="btn btn-icon btn-danger btn-sm" onclick="CapitalMgmt.deleteEntry('${e.id}')" title="Delete" aria-label="Delete capital entry">×</button></td>
             </tr>`;
         });
 

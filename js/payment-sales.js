@@ -74,7 +74,7 @@ const SalePayments = {
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="SalePayments.shareWhatsApp('${p.id}')" title="Share via WhatsApp">📱</button>
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="SalePayments.printPayment('${p.id}')" title="Print PDF Receipt">📄</button>
                 <button class="btn btn-icon btn-ghost btn-sm" onclick="SalePayments.editPayment('${p.id}')" title="Edit">✏️</button>
-                <button class="btn btn-icon btn-danger btn-sm" onclick="SalePayments.deletePayment('${p.id}')" title="Delete">×</button>
+                <button class="btn btn-icon btn-danger btn-sm" onclick="SalePayments.deletePayment('${p.id}')" title="Delete" aria-label="Delete buyer receipt">×</button>
             </div></td>
         </tr>`).join('') || '<tr><td colspan="8" class="text-center" style="color:var(--text-muted)">No receipt history</td></tr>';
     },
@@ -134,7 +134,12 @@ const SalePayments = {
 
     async showDirectPaymentModal() {
         PaymentService.activate('buyer');
+        PaymentService.openingSettlement = false;
         document.getElementById('dpay-title').textContent = 'General Buyer Receipt / Deposit Settlement';
+        document.getElementById('dpay-amount-label').innerHTML = 'Receipt Amount (PKR) <span class="required">*</span>';
+        document.getElementById('dpay-save-btn').textContent = 'Record Receipt';
+        document.getElementById('dpay-amount-label').textContent = 'Receipt Amount (PKR)';
+        document.getElementById('dpay-save-btn').textContent = 'Record Receipt';
         document.getElementById('dpay-party-label').textContent = 'Select Buyer Name *';
         document.getElementById('dpay-receipt-id').value = await Utils.getNextReceiptId('payment');
         document.getElementById('dpay-party-name').value = '';

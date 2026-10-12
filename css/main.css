@@ -363,6 +363,17 @@ a:hover { color: var(--accent-primary-hover); }
     box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
 }
 
+.form-input.is-invalid, .form-select.is-invalid, .form-textarea.is-invalid {
+    border-color: var(--accent-danger) !important;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.14);
+}
+.field-error {
+    display: block;
+    margin-top: 4px;
+    color: var(--accent-danger);
+    font-size: 0.8rem;
+}
+
 .form-input::placeholder { color: var(--text-muted); }
 
 .form-input[readonly] {

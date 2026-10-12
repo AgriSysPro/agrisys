@@ -25,7 +25,7 @@ const Expenses = {
             <td>${Utils.formatDate(e.date)}</td><td><span class="badge badge-info">${Utils.escapeHTML(e.type)}</span></td>
             <td>${Utils.escapeHTML(e.description || '-')}</td><td>${Utils.escapeHTML(e.crop || '-')}</td>
             <td>${Utils.escapeHTML(e.purchaseId || '-')}</td><td class="text-right font-bold">PKR ${Utils.formatPKR(e.amount)}</td>
-            <td><button class="btn btn-icon btn-danger btn-sm" onclick="Expenses.delete('${e.id}')">🗑️</button></td>
+            <td><button class="btn btn-icon btn-danger btn-sm" onclick="Expenses.delete('${e.id}')" title="Delete" aria-label="Delete expense">×</button></td>
         </tr>`).join('') || '<tr><td colspan="7" class="text-center" style="color:var(--text-muted)">No expenses</td></tr>';
     },
 

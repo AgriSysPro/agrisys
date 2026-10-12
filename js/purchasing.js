@@ -286,10 +286,10 @@ const Purchasing = {
     },
 
     async validate(data) {
-        if (!data.farmerName) { Utils.showToast('Farmer name is required', 'error'); return false; }
-        if (!data.crop) { Utils.showToast('Crop is required', 'error'); return false; }
-        if (data.grossWeight <= 0) { Utils.showToast('Weight must be greater than 0', 'error'); return false; }
-        if (data.rate <= 0) { Utils.showToast('Rate must be greater than 0', 'error'); return false; }
+        if (!data.farmerName) return Utils.markInvalid('p-farmer', 'Farmer name is required');
+        if (!data.crop) return Utils.markInvalid('p-crop', 'Crop is required');
+        if (data.grossWeight <= 0) return Utils.markInvalid('p-gross-weight', 'Weight must be greater than 0');
+        if (data.rate <= 0) return Utils.markInvalid('p-rate', 'Rate must be greater than 0');
         if (data.amountPaid < 0) { Utils.showToast('Paid amount cannot be negative', 'error'); return false; }
         if (data.amountPaid > data.netPayableAmount) { Utils.showToast('Paid amount cannot exceed net payable amount', 'error'); return false; }
         const linkedPayments = await Utils.getInvoicePayments('purchase_payments', 'purchaseId', data.id);

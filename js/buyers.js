@@ -52,12 +52,13 @@ const Buyers = {
                 <td class="text-right">PKR ${Utils.formatPKR(totalRcvd)}</td>
                 <td class="text-right font-bold" style="color:${balance > 0 ? 'var(--accent-warning)' : 'var(--accent-success)'}">PKR ${Utils.formatPKR(balance)}</td>
                 <td><div class="table-actions">
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.showLedgerOptions('${Utils.escapeHTML(b.id)}')" title="Ledger Options">📊</button>
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.edit('${Utils.escapeHTML(b.id)}')" title="Edit">✏️</button>
-                    <button class="btn btn-icon btn-danger btn-sm" onclick="Buyers.delete('${Utils.escapeHTML(b.id)}')" title="Delete">🗑️</button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.showLedgerOptions('${Utils.escapeHTML(b.id)}')" title="Ledger Options" aria-label="Buyer ledger options"><i data-lucide="book-open"></i></button>
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="Buyers.edit('${Utils.escapeHTML(b.id)}')" title="Edit" aria-label="Edit buyer"><i data-lucide="pencil"></i></button>
+                    <button class="btn btn-icon btn-danger btn-sm" onclick="Buyers.delete('${Utils.escapeHTML(b.id)}')" title="Delete" aria-label="Delete buyer"><i data-lucide="trash-2"></i></button>
                 </div></td>
             </tr>`;
         }).join('');
+        Utils.safeCreateIcons();
     },
 
     showAddModal() {

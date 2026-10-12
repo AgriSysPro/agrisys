@@ -205,7 +205,7 @@ const BankAccounts = {
                 <td class="text-right font-bold" style="color:${t.type === 'deposit' ? 'var(--accent-success)' : 'var(--accent-danger)'}">${t.type === 'deposit' ? '+' : '−'}PKR ${Utils.formatPKR(t.amount)}</td>
                 <td class="text-right font-bold" style="color:${runBalance >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(runBalance)}</td>
                 <td class="text-center">${t.isReconciled ? '✅' : '<span style="color:var(--text-muted);font-size:0.8rem">Pending</span>'}</td>
-                <td><button class="btn btn-icon btn-danger btn-sm" onclick="BankAccounts.deleteTx('${t.id}')">🗑️</button></td>
+                <td><button class="btn btn-icon btn-danger btn-sm" onclick="BankAccounts.deleteTx('${t.id}')" title="Delete" aria-label="Delete account transaction">×</button></td>
             </tr>`;
         });
         // Show newest first

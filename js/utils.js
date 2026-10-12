@@ -226,13 +226,49 @@ const Utils = {
     // Show modal
     showModal(modalId) {
         const modal = document.getElementById(modalId);
-        if (modal) { modal.classList.add('active'); document.body.style.overflow = 'hidden'; }
+        if (modal) {
+            const maxLayer = [...document.querySelectorAll('.modal-overlay.active')].reduce((max, item) => Math.max(max, Number(item.style.zIndex) || 200), 200);
+            modal.style.zIndex = String(maxLayer + 1);
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
     },
 
     // Hide modal
     hideModal(modalId) {
         const modal = document.getElementById(modalId);
-        if (modal) { modal.classList.remove('active'); document.body.style.overflow = ''; }
+        if (modal) {
+            modal.classList.remove('active');
+            document.body.style.overflow = document.querySelector('.modal-overlay.active') ? 'hidden' : '';
+            if (modalId === 'payment-modal' && typeof PaymentService !== 'undefined') PaymentService.openingSettlement = false;
+        }
+    },
+
+    markInvalid(inputId, message) {
+        const input = document.getElementById(inputId);
+        if (!input) return false;
+        input.classList.add('is-invalid');
+        input.setAttribute('aria-invalid', 'true');
+        input.setAttribute('aria-describedby', `${inputId}-error`);
+        let error = document.getElementById(`${inputId}-error`);
+        if (!error) {
+            error = document.createElement('span');
+            error.id = `${inputId}-error`;
+            error.className = 'field-error';
+            input.closest('.form-group')?.appendChild(error);
+        }
+        error.textContent = message || 'Please check this field.';
+        input.focus();
+        return false;
+    },
+
+    clearInvalid(inputOrId) {
+        const input = typeof inputOrId === 'string' ? document.getElementById(inputOrId) : inputOrId;
+        if (!input) return;
+        input.classList.remove('is-invalid');
+        input.removeAttribute('aria-invalid');
+        input.removeAttribute('aria-describedby');
+        document.getElementById(`${input.id}-error`)?.remove();
     },
 
     // Confirm dialog
