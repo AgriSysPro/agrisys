@@ -184,7 +184,33 @@ const { pathToFileURL } = require('node:url');
             assert(rows[2].some(r => r.Item === 'Manual journal operating cash' && r.Amount === -50), 'Excel journal cash missing');
         } finally { XLSX.writeFile = write; }
     });
-    result.checks.push('two-tab payment race, atomic conflict rejection, manual-journal cash posting, matching screen and Excel financial totals');
+    await page.evaluate(async () => {
+        await DB.put('opening_balances', { id: 'OPEN-RACE', type: 'buyer_receivable', partyName: 'Opening Race', amount: 100, receivedAmount: 0, settledAmount: 0, date: '2026-01-01' });
+    });
+    await Promise.all([page, second].map(tab => tab.evaluate(async () => {
+        await OpeningBalances.settle('OPEN-RACE');
+        document.getElementById('pay-account').value = 'cash';
+        document.getElementById('pay-amount').value = '100';
+    })));
+    for (const tab of [page, second]) await tab.evaluate(() => {
+        const snapshot = DB.financialSnapshot.bind(DB);
+        DB.financialSnapshot = async () => {
+            const data = await snapshot(); window.snapshotReady = true;
+            await new Promise(resolve => { window.releaseSnapshot = resolve; });
+            return data;
+        };
+    });
+    const openingRaces = [page, second].map(tab => tab.evaluate(() => document.getElementById('pay-save-btn').onclick()));
+    await Promise.all([page, second].map(tab => tab.waitForFunction(() => window.snapshotReady)));
+    await Promise.all([page, second].map(tab => tab.evaluate(() => window.releaseSnapshot())));
+    await Promise.all(openingRaces);
+    await page.evaluate(async () => {
+        const payments = (await DB.getAll('opening_balance_payments')).filter(p => p.openingBalanceId === 'OPEN-RACE');
+        const cashEvents = (await DB.getAll('capital_transactions')).filter(t => t.sourceStore === 'opening_balance_payments' && payments.some(p => p.id === t.sourceId));
+        const opening = await DB.get('opening_balances', 'OPEN-RACE');
+        if (payments.length !== 1 || cashEvents.length !== 1 || opening.receivedAmount !== 100) throw new Error('Concurrent opening settlement was not atomic');
+    });
+    result.checks.push('two-tab payment and opening settlement races, atomic conflict rejection, manual-journal cash posting, matching screen and Excel financial totals');
     if (errors.length) throw new Error('Browser errors: ' + errors.join('; '));
     console.log(JSON.stringify(result, null, 2));
     await context.close();

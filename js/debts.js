@@ -14,8 +14,6 @@ const DebtsMgmt = {
         const entries = scopedEntries || Utils.filterBySeason(await DB.getAll('company_debts'), activeSeason);
         const totalGiven = entries.filter(e => e.type === 'given').reduce((s, e) => s + (e.amount || 0), 0);
         const totalRepaid = entries.filter(e => e.type === 'repaid').reduce((s, e) => s + (e.amount || 0), 0);
-        const netReceivable = Math.max(0, totalGiven - totalRepaid);
-
         // Group by personName
         const byPerson = {};
         entries.forEach(e => {
@@ -27,16 +25,53 @@ const DebtsMgmt = {
             byPerson[key].net = byPerson[key].given - byPerson[key].repaid;
         });
 
+        const netReceivable = Object.values(byPerson).reduce((sum, person) => sum + Math.max(0, person.net), 0);
+        const overpaymentLiability = Object.values(byPerson).reduce((sum, person) => sum + Math.max(0, -person.net), 0);
         const activeDebtorsCount = Object.values(byPerson).filter(p => p.net > 0).length;
 
         return {
             totalGiven,
             totalRepaid,
             netReceivable,
+            overpaymentLiability,
             activeDebtorsCount,
             byPerson,
             entries
         };
+    },
+
+    async validateHistory(operations) {
+        const before = await DB.getAll('company_debts');
+        const after = before.slice();
+        for (const op of operations.filter(item => item.storeName === 'company_debts')) {
+            const key = op.key ?? op.data?.id;
+            const index = after.findIndex(row => row.id === key);
+            if (index >= 0) after.splice(index, 1);
+            if (op.action !== 'delete' && !op.data?.isDeleted) after.push(op.data);
+        }
+        const balances = rows => {
+            const events = rows.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')
+                || (a.type === b.type ? 0 : a.type === 'given' ? -1 : 1) || String(a.id).localeCompare(String(b.id)));
+            const totals = {}, byDate = {};
+            events.forEach(event => {
+                const party = (event.personName || 'Unknown').trim().toLowerCase();
+                totals[party] = (totals[party] || 0) + (event.type === 'given' ? 1 : -1) * (event.amount || 0);
+                byDate[party] ||= {};
+                byDate[party][event.date || ''] = totals[party];
+            });
+            return byDate;
+        };
+        const oldHistory = balances(before), newHistory = balances(after);
+        for (const party of new Set([...Object.keys(oldHistory), ...Object.keys(newHistory)])) {
+            for (const date of new Set([...Object.keys(oldHistory[party] || {}), ...Object.keys(newHistory[party] || {})])) {
+                const oldBalance = oldHistory[party]?.[date] || 0;
+                const newBalance = newHistory[party]?.[date] || 0;
+                if (newBalance < Math.min(0, oldBalance) - 0.01) {
+                    const label = after.find(row => (row.personName || 'Unknown').trim().toLowerCase() === party)?.personName || party;
+                    throw new Error(`Repayment exceeds loan balance for ${label} on ${date || 'undated entry'}`);
+                }
+            }
+        }
     },
 
     // ── Render Stats Grid ──
@@ -66,6 +101,11 @@ const DebtsMgmt = {
                 <div class="stat-value">${summary.activeDebtorsCount}</div>
                 <div class="stat-desc" style="font-size: 0.75rem; color: var(--text-muted);">Parties with open balance</div>
             </div>
+            <div class="stat-card orange">
+                <div class="stat-label">Repayments Due Back</div>
+                <div class="stat-value">PKR ${Utils.formatPKR(summary.overpaymentLiability)}</div>
+                <div class="stat-desc" style="font-size: 0.75rem; color: var(--text-muted);">Overpayments requiring review</div>
+            </div>
         `;
     },
 
@@ -79,8 +119,10 @@ const DebtsMgmt = {
         if (personsTbody) {
             const personList = Object.values(summary.byPerson).sort((a, b) => b.net - a.net);
             personsTbody.innerHTML = personList.map(p => {
-                const isSettled = p.net <= 0;
-                const statusBadge = isSettled 
+                const isSettled = Math.abs(p.net) < 0.01;
+                const statusBadge = p.net < -0.01
+                    ? `<span class="badge badge-danger">Credit due back</span>`
+                    : isSettled
                     ? `<span class="badge badge-success">✓ Settled</span>` 
                     : `<span class="badge badge-warning">● Active</span>`;
                 
@@ -90,12 +132,12 @@ const DebtsMgmt = {
                     <td class="text-right" style="color: var(--accent-danger);">PKR ${Utils.formatPKR(p.given)}</td>
                     <td class="text-right" style="color: var(--accent-success);">PKR ${Utils.formatPKR(p.repaid)}</td>
                     <td class="text-right font-bold" style="color: ${p.net > 0 ? 'var(--accent-primary)' : 'var(--text-muted)'};">
-                        PKR ${Utils.formatPKR(Math.max(0, p.net))}
+                        ${p.net < -0.01 ? `PKR ${Utils.formatPKR(Math.abs(p.net))} credit due` : 'PKR ' + Utils.formatPKR(Math.max(0, p.net))}
                     </td>
                     <td>${statusBadge}</td>
                     <td class="text-right">
                         <button class="btn btn-sm btn-ghost" title="Give More Loan" onclick="DebtsMgmt.showAddModal('given', '${Utils.escapeHTML(p.name)}')"><i data-lucide="plus"></i> Give</button>
-                        <button class="btn btn-sm btn-success" title="Receive Repayment" onclick="DebtsMgmt.showAddModal('repaid', '${Utils.escapeHTML(p.name)}')"><i data-lucide="arrow-down-left"></i> Receive</button>
+                        ${p.net > 0 ? `<button class="btn btn-sm btn-success" title="Receive Repayment" onclick="DebtsMgmt.showAddModal('repaid', '${Utils.escapeHTML(p.name)}')"><i data-lucide="arrow-down-left"></i> Receive</button>` : ''}
                         ${p.net > 0 ? `<button class="btn btn-sm btn-icon btn-ghost" title="Send WhatsApp Reminder" onclick="DebtsMgmt.shareReminder('${Utils.escapeHTML(p.name)}')">💬</button>` : ''}
                     </td>
                 </tr>`;
@@ -193,6 +235,7 @@ const DebtsMgmt = {
 
     // ── Save Transaction ──
     async saveEntry() {
+        const snapshot = await DB.financialSnapshot();
         const idInput = document.getElementById('debt-id').value;
         const type = document.getElementById('debt-type').value || 'given';
         const personName = document.getElementById('debt-person').value.trim();
@@ -207,6 +250,8 @@ const DebtsMgmt = {
 
         const recordId = idInput || Utils.generateId();
         const isEdit = Boolean(idInput);
+        const existingDebt = isEdit ? await DB.get('company_debts', recordId) : null;
+        if (isEdit && !existingDebt) { Utils.showToast('Debt entry no longer exists', 'error'); return; }
 
         const ops = [];
 
@@ -241,7 +286,7 @@ const DebtsMgmt = {
                     isReconciled: false,
                     sourceStore: 'company_debts',
                     sourceId: recordId,
-                    createdAt: new Date().toISOString()
+                    createdAt: existingDebt?.createdAt || new Date().toISOString()
                 }
             });
         }
@@ -259,11 +304,15 @@ const DebtsMgmt = {
                 notes,
                 accountId,
                 linkedTxId,
-                createdAt: new Date().toISOString()
+                createdAt: existingDebt?.createdAt || new Date().toISOString(),
+                ...(existingDebt ? { updatedAt: new Date().toISOString() } : {})
             }
         });
 
-        await DB.commitUnitOfWork(ops);
+        try {
+            await this.validateHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
 
         Utils.hideModal('debt-modal');
         Utils.showToast(isEdit ? 'Debt entry updated successfully!' : 'Interest-free debt transaction saved!');
@@ -278,6 +327,7 @@ const DebtsMgmt = {
     // ── Delete Entry ──
     async deleteEntry(id) {
         if (!await Utils.confirm('Are you sure you want to delete this debt transaction? This will also reverse any associated bank cash flows.')) return;
+        const snapshot = await DB.financialSnapshot();
         const ops = [];
         // Clean up linked bank transactions
         const allTxs = await DB.getAll('capital_transactions') || [];
@@ -289,7 +339,10 @@ const DebtsMgmt = {
         const debt = await DB.get('company_debts', id);
         if (debt) ops.push({ storeName: 'company_debts', action: 'delete', key: id, softDelete: true, data: debt });
 
-        await DB.commitUnitOfWork(ops);
+        try {
+            await this.validateHistory(ops);
+            await DB.commitUnitOfWork(ops, snapshot);
+        } catch (error) { Utils.showToast(error.message, 'error'); return; }
         Utils.showToast('Transaction deleted successfully!');
         await this.render();
     },

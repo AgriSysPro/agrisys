@@ -140,6 +140,46 @@
     {
       "name": "Party balance rebuild uses payment allocations when invoice totals are stale",
       "status": "PASS"
+    },
+    {
+      "name": "Opening capital balance and cash transaction are saved as one unit",
+      "status": "PASS"
+    },
+    {
+      "name": "Failed capital opening save leaves no orphan cash transaction",
+      "status": "PASS"
+    },
+    {
+      "name": "Failed opening-balance save does not leave an unlinked farmer master",
+      "status": "PASS"
+    },
+    {
+      "name": "Opening settlement rejects a second concurrent full settlement",
+      "status": "PASS"
+    },
+    {
+      "name": "Failed opening settlement commit leaves no partial payment or cash event",
+      "status": "PASS"
+    },
+    {
+      "name": "Debt repayment cannot exceed outstanding loan and is committed with cash",
+      "status": "PASS"
+    },
+    {
+      "name": "Existing debt overpayments remain visible as liabilities",
+      "status": "PASS"
+    },
+    {
+      "name": "Aging report excludes future invoice and opening-balance settlements",
+      "status": "PASS"
+    },
+    {
+      "name": "Cash book applies capital opening balances only when effective",
+      "status": "PASS"
+    },
+    {
+      "name": "Finance export rebuilds rows from the current filters every time",
+      "status": "PASS"
     }
   ]
 }

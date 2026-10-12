@@ -114,24 +114,22 @@ const OpeningBalances = {
         const ops = [];
         ops.push({ storeName: 'opening_balances', action: 'put', data });
 
-        if (type === 'farmer_payable' || type === 'farmer_advance') await Farmers.ensureFarmer(data.partyName);
-        if (type === 'buyer_receivable' || type === 'buyer_advance') await Buyers.ensureBuyer(data.partyName);
+        if (type === 'farmer_payable' || type === 'farmer_advance') {
+            const exists = (await DB.getAll('farmers')).some(f => f.name.trim().toLowerCase() === data.partyName.trim().toLowerCase());
+            if (!exists) ops.push({ storeName: 'farmers', action: 'put', data: { id: Utils.generateId(), name: data.partyName, phone: '', address: '', notes: '', createdAt: new Date().toISOString() } });
+        }
+        if (type === 'buyer_receivable' || type === 'buyer_advance') {
+            const exists = (await DB.getAll('buyers')).some(b => b.name.trim().toLowerCase() === data.partyName.trim().toLowerCase());
+            if (!exists) ops.push({ storeName: 'buyers', action: 'put', data: { id: Utils.generateId(), name: data.partyName, phone: '', address: '', notes: '', createdAt: new Date().toISOString() } });
+        }
 
         if (type === 'capital') {
-            const tx = await Utils.createLinkedCapitalTx({
-                accountId: data.accountId,
-                type: 'deposit',
-                amount,
-                date: data.date,
-                description: 'Opening capital balance',
-                sourceStore: 'opening_balances',
-                sourceId: data.id
-            });
-            if (tx) { 
-                data.capitalTxId = tx.id; 
-                // replace the first op since we updated data
-                ops[0] = { storeName: 'opening_balances', action: 'put', data };
-            }
+            const tx = { id: Utils.generateId(), accountId: data.accountId, type: 'deposit', amount, date: data.date,
+                description: 'Opening capital balance', sourceStore: 'opening_balances', sourceId: data.id,
+                isReconciled: false, createdAt: new Date().toISOString() };
+            data.capitalTxId = tx.id;
+            ops[0] = { storeName: 'opening_balances', action: 'put', data };
+            ops.push({ storeName: 'capital_transactions', action: 'put', data: tx });
             ops.push({
                 storeName: 'capital_entries',
                 action: 'put',
@@ -142,7 +140,7 @@ const OpeningBalances = {
                     date: data.date,
                     description: 'Opening capital balance',
                     accountId: data.accountId,
-                    linkedTxId: tx ? tx.id : null,
+                    linkedTxId: tx.id,
                     sourceStore: 'opening_balances',
                     sourceId: data.id,
                     createdAt: new Date().toISOString()
@@ -228,8 +226,16 @@ const OpeningBalances = {
         const savePayment = async (printAfterSave = false) => {
             const payAmt = Utils.pf(document.getElementById('pay-amount').value);
             if (payAmt <= 0) { Utils.showToast('Amount must be > 0', 'error'); return; }
-            if (payAmt > balance) { Utils.showToast('Payment cannot exceed opening balance', 'error'); return; }
             if (!document.getElementById('pay-account').value) { Utils.showToast('Select cash/bank account for this settlement', 'error'); return; }
+            const snapshot = await DB.financialSnapshot();
+            const current = await DB.get('opening_balances', b.id);
+            if (!current || current.type !== b.type) { Utils.showToast('Opening balance no longer exists', 'error'); return; }
+            const existingPayments = (await DB.getAll('opening_balance_payments')).filter(p => p.openingBalanceId === b.id);
+            const recordedSettled = this.settledAmount(current);
+            const eventSettled = existingPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+            const currentSettled = Math.max(recordedSettled, eventSettled);
+            const currentBalance = Math.max(0, (current.amount || 0) - currentSettled);
+            if (payAmt > currentBalance + 0.001) { Utils.showToast('Opening balance changed in another tab. Refresh and retry.', 'error'); return; }
             const receiptNo = document.getElementById('pay-receipt-id').value;
             const payment = {
                 id: Utils.generateId(),
@@ -247,49 +253,44 @@ const OpeningBalances = {
                 reference: document.getElementById('pay-ref').value.trim(),
                 notes: document.getElementById('pay-notes').value.trim(),
                 accountId: document.getElementById('pay-account').value,
-                previousBalance: balance,
-                newBalance: balance - payAmt,
+                previousBalance: currentBalance,
+                newBalance: currentBalance - payAmt,
                 createdAt: new Date().toISOString()
             };
-            await DB.put('opening_balance_payments', payment);
-            await Utils.confirmReceiptId('payment', receiptNo);
-            const tx = await Utils.createLinkedCapitalTx({
-                accountId: payment.accountId,
-                type: isFarmer ? 'withdrawal' : 'deposit',
-                amount: payAmt,
-                date: payment.date,
-                description: isFarmer
-                    ? `Payment to farmer ${b.partyName} against opening balance`
-                    : `Receipt from buyer ${b.partyName} against opening balance`,
-                sourceStore: 'opening_balance_payments',
-                sourceId: payment.id
-            });
-            if (tx) {
-                payment.capitalTxId = tx.id;
-                await DB.put('opening_balance_payments', payment);
+            const tx = { id: Utils.generateId(), accountId: payment.accountId, type: isFarmer ? 'withdrawal' : 'deposit', amount: payAmt,
+                date: payment.date, description: isFarmer
+                    ? `Payment to farmer ${current.partyName} against opening balance`
+                    : `Receipt from buyer ${current.partyName} against opening balance`,
+                sourceStore: 'opening_balance_payments', sourceId: payment.id, isReconciled: false, createdAt: payment.createdAt };
+            payment.capitalTxId = tx.id;
+            const newSettled = currentSettled + payAmt;
+            current.settledAmount = newSettled;
+            if (isFarmer) current.paidAmount = newSettled;
+            else current.receivedAmount = newSettled;
+            current.balance = Math.max(0, (current.amount || 0) - newSettled);
+            current.settlementStatus = current.balance <= 0 ? 'paid' : 'partial';
+            current.updatedAt = new Date().toISOString();
+            const ops = [
+                { storeName: 'opening_balance_payments', action: 'put', data: payment },
+                { storeName: 'capital_transactions', action: 'put', data: tx },
+                { storeName: 'opening_balances', action: 'put', data: current },
+                { storeName: 'audit_logs', action: 'put', data: {
+                    id: Utils.generateId(), date: Utils.todayISO(), action: 'create', entityType: 'opening_balance_payment', entityId: payment.id,
+                    details: { receiptNo, openingBalanceId: current.id, type: current.type, partyName: current.partyName, amount: payAmt,
+                        previousBalance: payment.previousBalance, newBalance: payment.newBalance, capitalTxId: tx.id }, createdAt: new Date().toISOString()
+                } }
+            ];
+            if (typeof CoreServices !== 'undefined') {
+                const partyType = isFarmer ? 'farmer' : 'buyer';
+                const cacheOp = await CoreServices.getPartyBalanceOp(partyType, current.partyName, -payAmt);
+                if (cacheOp) ops.push(cacheOp);
             }
-
-            const newSettled = this.settledAmount(b) + payAmt;
-            b.settledAmount = newSettled;
-            if (isFarmer) b.paidAmount = newSettled;
-            else b.receivedAmount = newSettled;
-            b.balance = Math.max(0, (b.amount || 0) - newSettled);
-            b.settlementStatus = b.balance <= 0 ? 'paid' : 'partial';
-            b.updatedAt = new Date().toISOString();
-            await DB.put('opening_balances', b);
-            await Utils.audit('create', 'opening_balance_payment', payment.id, {
-                receiptNo,
-                openingBalanceId: b.id,
-                type: b.type,
-                partyName: b.partyName,
-                amount: payAmt,
-                previousBalance: payment.previousBalance,
-                newBalance: payment.newBalance,
-                capitalTxId: payment.capitalTxId || null
-            });
+            try { await DB.commitUnitOfWork(ops, snapshot); }
+            catch (error) { Utils.showToast(error.code === 'CONFLICT' ? 'Opening balance changed in another tab. Refresh and retry.' : error.message, 'error'); return; }
+            await Utils.confirmReceiptId('payment', receiptNo);
             Utils.hideModal('payment-modal');
             Utils.showToast(isFarmer ? 'Opening payment recorded!' : 'Opening receipt recorded!');
-            if (printAfterSave) await ReceiptPDF.generatePaymentVoucher(payment, b, isFarmer ? 'farmer' : 'buyer');
+            if (printAfterSave) await ReceiptPDF.generatePaymentVoucher(payment, current, isFarmer ? 'farmer' : 'buyer');
             this.render();
         };
         document.getElementById('pay-save-btn').onclick = () => savePayment(false);
@@ -343,7 +344,7 @@ const OpeningBalances = {
                 if (op) ops.push(op);
             }
             if (b.type === 'farmer_payable' && b.partyName) {
-                const op = await CoreServices.getPartyBalanceOp('farmer', b.partyName, -(b.amount || 0));
+                const op = await CoreServices.getPartyBalanceOp('farmer', b.partyName, -Math.max(0, (b.amount || 0) - this.settledAmount(b)));
                 if (op) ops.push(op);
             }
             if (b.type === 'farmer_advance' && b.partyName) {
@@ -351,7 +352,7 @@ const OpeningBalances = {
                 if (op) ops.push(op);
             }
             if (b.type === 'buyer_receivable' && b.partyName) {
-                const op = await CoreServices.getPartyBalanceOp('buyer', b.partyName, -(b.amount || 0));
+                const op = await CoreServices.getPartyBalanceOp('buyer', b.partyName, -Math.max(0, (b.amount || 0) - this.settledAmount(b)));
                 if (op) ops.push(op);
             }
             if (b.type === 'buyer_advance' && b.partyName) {
@@ -365,6 +366,7 @@ const OpeningBalances = {
             await Utils.validateAdvanceHistory(ops);
             await DB.commitUnitOfWork(ops, snapshot);
         } catch (error) { Utils.showToast(error.message, 'error'); return; }
+        if (typeof CoreServices !== 'undefined') await CoreServices.runMaterializedViewMigrations();
         Utils.showToast('Opening balance deleted!');
         this.render();
     }
@@ -717,19 +719,30 @@ const AgingReports = {
 
     async buildRows() {
         const activeSeason = await Utils.getActiveSeason();
-        const today = new Date(Utils.todayISO());
-        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
-        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason);
-        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason);
+        const asOfDate = Utils.todayISO();
+        const today = new Date(asOfDate);
+        const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason).filter(p => p.date <= asOfDate);
+        const sales = Utils.filterBySeason(await DB.getAll('sales'), activeSeason).filter(s => s.date <= asOfDate);
+        const purchasePayments = await DB.getAll('purchase_payments');
+        const salePayments = await DB.getAll('sale_payments');
+        const openingPayments = await DB.getAll('opening_balance_payments');
+        const openings = Utils.filterBySeason(await DB.getAll('opening_balances'), activeSeason).filter(o => o.date <= asOfDate);
+        const openingSettledAsOf = opening => {
+            const linked = openingPayments.filter(p => p.openingBalanceId === opening.id);
+            const allSettled = linked.reduce((sum, p) => sum + (p.amount || 0), 0);
+            const recorded = Utils.openingBalanceSettled(opening);
+            const initial = Math.max(0, recorded - allSettled);
+            return initial + linked.filter(p => !p.date || p.date <= asOfDate).reduce((sum, p) => sum + (p.amount || 0), 0);
+        };
         const farmerRows = purchases.map(p => {
-            const balance = ((p.netPayableAmount ?? p.amount ?? 0)) - (p.amountPaid || 0);
+            const balance = (p.netPayableAmount ?? p.amount ?? 0) - Utils.paymentTotalFor(p, purchasePayments, 'purchaseId', 'amountPaid', asOfDate);
             return { party: p.farmerName, source: p.id, date: p.dueDate || p.date, balance, type: 'farmer' };
-        }).concat(openings.filter(o => o.type === 'farmer_payable').map(o => ({ party: o.partyName, source: 'Opening Balance', date: o.date, balance: Math.max(0, (o.amount || 0) - (o.paidAmount || o.settledAmount || 0)), type: 'farmer' })))
+        }).concat(openings.filter(o => o.type === 'farmer_payable').map(o => ({ party: o.partyName, source: 'Opening Balance', date: o.date, balance: Math.max(0, (o.amount || 0) - openingSettledAsOf(o)), type: 'farmer' })))
             .filter(r => r.balance > 0);
         const buyerRows = sales.map(s => {
-            const balance = (s.amount || 0) - (s.amountReceived || 0);
+            const balance = (s.amount || 0) - Utils.paymentTotalFor(s, salePayments, 'saleId', 'amountReceived', asOfDate);
             return { party: s.buyerName, source: s.id, date: s.dueDate || s.date, balance, type: 'buyer' };
-        }).concat(openings.filter(o => o.type === 'buyer_receivable').map(o => ({ party: o.partyName, source: 'Opening Balance', date: o.date, balance: Math.max(0, (o.amount || 0) - (o.receivedAmount || o.settledAmount || 0)), type: 'buyer' })))
+        }).concat(openings.filter(o => o.type === 'buyer_receivable').map(o => ({ party: o.partyName, source: 'Opening Balance', date: o.date, balance: Math.max(0, (o.amount || 0) - openingSettledAsOf(o)), type: 'buyer' })))
             .filter(r => r.balance > 0);
         const decorate = r => {
             const days = Math.max(0, Math.floor((today - new Date(r.date)) / (24 * 60 * 60 * 1000)));
@@ -798,12 +811,17 @@ const FinanceReports = {
         const from = document.getElementById('cb-from').value;
         const to = document.getElementById('cb-to').value;
         const accounts = await DB.getAll('capital_accounts');
-        const txs = [...await DB.getAll('capital_transactions'), ...await Utils.journalCashTransactions()].filter(t => !accountId || t.accountId === accountId);
+        const selectedAccounts = accounts.filter(a => !accountId || a.id === accountId);
+        const transactions = [...await DB.getAll('capital_transactions'), ...await Utils.journalCashTransactions()].filter(t => !accountId || t.accountId === accountId);
         const accountMap = Object.fromEntries(accounts.map(a => [a.id, a]));
-        const opening = accounts
-            .filter(a => !accountId || a.id === accountId)
-            .reduce((s, a) => s + (a.openingBalance || 0), 0);
-        const sorted = txs.sort((a, b) => new Date(a.date) - new Date(b.date));
+        const openingDate = account => account.createdAt ? String(account.createdAt).slice(0, 10) : '';
+        const eligibleAccounts = selectedAccounts.filter(a => !to || !openingDate(a) || openingDate(a) <= to);
+        const opening = eligibleAccounts.filter(a => !from || !openingDate(a) || openingDate(a) <= from).reduce((s, a) => s + (a.openingBalance || 0), 0);
+        const openingEvents = from ? eligibleAccounts.filter(a => openingDate(a) > from && (!to || openingDate(a) <= to) && (a.openingBalance || 0) !== 0)
+            .map(a => ({ id: `opening-${a.id}`, accountId: a.id, date: openingDate(a), type: a.openingBalance > 0 ? 'deposit' : 'withdrawal', amount: Math.abs(a.openingBalance),
+                description: `Opening balance: ${a.name}`, isReconciled: true, openingEvent: true })) : [];
+        const sorted = [...transactions, ...openingEvents].sort((a, b) => a.date.localeCompare(b.date)
+            || Number(Boolean(b.openingEvent)) - Number(Boolean(a.openingEvent)));
         let running = opening;
         sorted.filter(t => from && t.date < from).forEach(t => {
             if (t.type === 'deposit') running += t.amount || 0;
@@ -940,7 +958,7 @@ const FinanceReports = {
         XLSX.writeFile(wb, filename);
     },
 
-    async exportCashBook() { if (!this.cashBookRows) await this.renderCashBook(); this.exportRows(this.cashBookRows, 'Cash Book', `Cash_Book_${Utils.todayISO()}.xlsx`); },
-    async exportTrialBalance() { if (!this.trialBalanceRows) await this.renderTrialBalance(); this.exportRows(this.trialBalanceRows, 'Trial Balance', `Trial_Balance_${Utils.todayISO()}.xlsx`); },
-    async exportGeneralLedger() { if (!this.generalLedgerRows) await this.renderGeneralLedger(); this.exportRows(this.generalLedgerRows, 'General Ledger', `General_Ledger_${Utils.todayISO()}.xlsx`); }
+    async exportCashBook() { await this.renderCashBook(); this.exportRows(this.cashBookRows, 'Cash Book', `Cash_Book_${Utils.todayISO()}.xlsx`); },
+    async exportTrialBalance() { await this.renderTrialBalance(); this.exportRows(this.trialBalanceRows, 'Period Journal Summary', `Period_Journal_Summary_${Utils.todayISO()}.xlsx`); },
+    async exportGeneralLedger() { await this.renderGeneralLedger(); this.exportRows(this.generalLedgerRows, 'General Ledger', `General_Ledger_${Utils.todayISO()}.xlsx`); }
 };

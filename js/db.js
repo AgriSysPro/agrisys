@@ -347,7 +347,7 @@ const DB = {
         const operationStores = new Set(operations.map(op => op.storeName));
         const dependencyGroups = [
             ['purchases', 'sales', 'stock_adjustments'],
-            ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments']
+            ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments', 'company_debts']
         ];
         const getKey = row => row?.id ?? row?.key ?? row?.crop ?? row?.seasonId;
         const scopes = new Map();
@@ -358,8 +358,8 @@ const DB = {
             const key = op.key ?? getKey(op.data);
             if (key !== undefined) addScope(op.storeName, record => getKey(record) === key);
             if (row?.crop) addScope(op.storeName, record => (record.crop || '').trim().toLowerCase() === row.crop.trim().toLowerCase());
-            const names = [row?.farmerName, row?.buyerName, row?.partyName].filter(Boolean).map(name => name.trim().toLowerCase());
-            if (names.length) addScope(op.storeName, record => [record.farmerName, record.buyerName, record.partyName].some(name => name && names.includes(name.trim().toLowerCase())));
+            const names = [row?.farmerName, row?.buyerName, row?.partyName, row?.personName].filter(Boolean).map(name => name.trim().toLowerCase());
+            if (names.length) addScope(op.storeName, record => [record.farmerName, record.buyerName, record.partyName, record.personName].some(name => name && names.includes(name.trim().toLowerCase())));
         }
         for (const group of dependencyGroups) {
             if (!group.some(name => operationStores.has(name))) continue;
@@ -370,12 +370,12 @@ const DB = {
                 const old = (expected?.[op.storeName] || []).find(row => getKey(row) === (op.key ?? getKey(op.data)));
                 for (const row of [old, op.data]) {
                     if (row?.crop) crops.add(row.crop.trim().toLowerCase());
-                    for (const name of [row?.farmerName, row?.buyerName, row?.partyName]) if (name) parties.add(name.trim().toLowerCase());
+                    for (const name of [row?.farmerName, row?.buyerName, row?.partyName, row?.personName]) if (name) parties.add(name.trim().toLowerCase());
                 }
             }
             for (const name of group) {
                 if (group.includes('stock_adjustments') && crops.size) addScope(name, row => crops.has((row.crop || '').trim().toLowerCase()));
-                if (group.includes('farmer_advances') && parties.size) addScope(name, row => [row.farmerName, row.buyerName, row.partyName].some(value => value && parties.has(value.trim().toLowerCase())));
+                if (group.includes('farmer_advances') && parties.size) addScope(name, row => [row.farmerName, row.buyerName, row.partyName, row.personName].some(value => value && parties.has(value.trim().toLowerCase())));
             }
         }
         const checkedExpected = expected && Object.fromEntries(Object.entries(expected)

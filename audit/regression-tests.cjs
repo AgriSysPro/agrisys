@@ -16,7 +16,7 @@ const context = vm.createContext({ console: { log() {}, warn() {}, error() {} },
 context.XLSX = { utils: { json_to_sheet: rows => rows, book_new: () => ({ SheetNames: [], Sheets: {} }), book_append_sheet: (wb, sheet, name) => { wb.Sheets[name] = sheet; wb.SheetNames.push(name); } }, writeFile: (wb, name) => { context.lastExport = { wb, name }; } };
 const files = fs.readdirSync(path.join(root, 'js')).filter(f => f.endsWith('.js'));
 for (const file of files) vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), context, { filename: file });
-const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, CropAnalysis, StockAdjustments, Settings, PaymentService, InventoryLots, PurchaseList, SaleList})', context);
+const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, CropAnalysis, StockAdjustments, Settings, PaymentService, InventoryLots, PurchaseList, SaleList, OpeningBalances, AgingReports, FinanceReports, DebtsMgmt})', context);
 const originalImport = api.DB.importAll;
 const originalBuyerRender = api.Buyers.render;
 let records = {}, seq = 0;
@@ -354,6 +354,116 @@ const sale = (id, extra = {}) => ({ id, buyerName: 'Ali', crop: 'Wheat', date: '
         records.sale_payments = [{ id: 'SP1', buyerName: 'Ali', saleId: 'S1', allocations: [{ invoiceId: 'S1', amount: 40 }], amount: 40, date: '2026-02-01' }];
         await api.CoreServices.runMaterializedViewMigrations();
         assert.equal(await api.CoreServices.getBuyerBalance('Ali'), 60);
+    });
+    await check('Opening capital balance and cash transaction are saved as one unit', async () => {
+        records.capital_accounts = [{ id: 'cash', name: 'Cash', openingBalance: 0 }];
+        form({ 'ob-type': 'capital', 'ob-amount': '100', 'ob-weight': '', 'ob-date': '2026-01-01', 'ob-party': '', 'ob-crop': '', 'ob-account': 'cash', 'ob-notes': '' });
+        await api.OpeningBalances.save();
+        assert.equal(records.opening_balances.length, 1);
+        assert.equal(records.capital_transactions.length, 1);
+        assert.equal(records.capital_entries.length, 1);
+        assert.equal(records.capital_transactions[0].sourceId, records.opening_balances[0].id);
+    });
+    await check('Failed capital opening save leaves no orphan cash transaction', async () => {
+        form({ 'ob-type': 'capital', 'ob-amount': '100', 'ob-weight': '', 'ob-date': '2026-01-01', 'ob-party': '', 'ob-crop': '', 'ob-account': 'cash', 'ob-notes': '' });
+        const commit = api.DB.commitUnitOfWork;
+        api.DB.commitUnitOfWork = async () => { throw new Error('simulated commit failure'); };
+        await api.OpeningBalances.save();
+        api.DB.commitUnitOfWork = commit;
+        assert.equal((records.opening_balances || []).length, 0);
+        assert.equal((records.capital_transactions || []).length, 0);
+        assert.equal((records.capital_entries || []).length, 0);
+    });
+    await check('Failed opening-balance save does not leave an unlinked farmer master', async () => {
+        form({ 'ob-type': 'farmer_payable', 'ob-amount': '100', 'ob-weight': '', 'ob-date': '2026-01-01', 'ob-party': 'New Farmer', 'ob-crop': '', 'ob-account': '', 'ob-notes': '' });
+        const commit = api.DB.commitUnitOfWork;
+        api.DB.commitUnitOfWork = async () => { throw new Error('simulated commit failure'); };
+        await api.OpeningBalances.save();
+        api.DB.commitUnitOfWork = commit;
+        assert.equal((records.opening_balances || []).length, 0);
+        assert.equal((records.farmers || []).length, 0);
+    });
+    await check('Opening settlement rejects a second concurrent full settlement', async () => {
+        records.opening_balances = [{ id: 'OB', type: 'buyer_receivable', partyName: 'Ali', amount: 100, receivedAmount: 0, settledAmount: 0, date: '2026-01-01' }];
+        await api.OpeningBalances.settle('OB');
+        element('pay-account').value = 'cash';
+        const readSnapshot = api.DB.financialSnapshot.bind(api.DB);
+        let snapshots = 0, release;
+        const bothSnapshots = new Promise(resolve => { release = resolve; });
+        api.DB.financialSnapshot = async () => { const value = await readSnapshot(); if (++snapshots === 2) release(); await bothSnapshots; return value; };
+        const firstSave = element('pay-save-btn').onclick();
+        await api.OpeningBalances.settle('OB');
+        element('pay-account').value = 'cash';
+        const secondSave = element('pay-save-btn').onclick();
+        await Promise.all([firstSave, secondSave]);
+        api.DB.financialSnapshot = readSnapshot;
+        assert.equal((records.opening_balance_payments || []).length, 1);
+        assert.equal((records.capital_transactions || []).length, 1);
+        assert.equal((await api.DB.get('opening_balances', 'OB')).receivedAmount, 100);
+    });
+    await check('Failed opening settlement commit leaves no partial payment or cash event', async () => {
+        records.opening_balances = [{ id: 'OB', type: 'farmer_payable', partyName: 'Ali', amount: 100, paidAmount: 0, settledAmount: 0, date: '2026-01-01' }];
+        await api.OpeningBalances.settle('OB');
+        form({ 'pay-amount': '50', 'pay-account': 'cash', 'pay-date': '2026-02-01' });
+        const commit = api.DB.commitUnitOfWork;
+        api.DB.commitUnitOfWork = async () => { throw new Error('simulated commit failure'); };
+        await element('pay-save-btn').onclick();
+        api.DB.commitUnitOfWork = commit;
+        assert.equal((records.opening_balance_payments || []).length, 0);
+        assert.equal((records.capital_transactions || []).length, 0);
+        assert.equal((await api.DB.get('opening_balances', 'OB')).paidAmount, 0);
+    });
+    await check('Debt repayment cannot exceed outstanding loan and is committed with cash', async () => {
+        records.company_debts = [{ id: 'LOAN', personName: 'Ali', type: 'given', amount: 100, date: '2026-01-01' }];
+        form({ 'debt-id': '', 'debt-type': 'repaid', 'debt-person': 'Ali', 'debt-amount': '150', 'debt-date': '2026-02-01', 'debt-notes': '', 'debt-account': 'cash' });
+        await api.DebtsMgmt.saveEntry();
+        assert.equal(records.company_debts.length, 1);
+        assert.equal((records.capital_transactions || []).length, 0);
+        form({ 'debt-id': '', 'debt-type': 'repaid', 'debt-person': 'Ali', 'debt-amount': '100', 'debt-date': '2026-02-01', 'debt-notes': '', 'debt-account': 'cash' });
+        await api.DebtsMgmt.saveEntry();
+        assert.equal(records.company_debts.length, 2);
+        assert.equal(records.capital_transactions.length, 1);
+    });
+    await check('Existing debt overpayments remain visible as liabilities', async () => {
+        records.company_debts = [
+            { id: 'LOAN', personName: 'Ali', type: 'given', amount: 100, date: '2026-01-01' },
+            { id: 'OVER', personName: 'Ali', type: 'repaid', amount: 150, date: '2026-02-01' }
+        ];
+        const summary = await api.DebtsMgmt.getDebtsSummary(records.company_debts);
+        assert.equal(summary.netReceivable, 0);
+        assert.equal(summary.overpaymentLiability, 50);
+        assert.equal(summary.byPerson.ali.net, -50);
+    });
+    await check('Aging report excludes future invoice and opening-balance settlements', async () => {
+        records.purchases = [purchase('P1', { amountPaid: 100, initialPaymentAmount: 0 })];
+        records.purchase_payments = [{ id: 'PP1', farmerName: 'Ali', purchaseId: 'P1', allocations: [{ invoiceId: 'P1', amount: 100 }], amount: 100, date: '2027-01-01' }];
+        records.sales = [sale('S1', { amountReceived: 100, initialReceiptAmount: 0 })];
+        records.sale_payments = [{ id: 'SP1', buyerName: 'Ali', saleId: 'S1', allocations: [{ invoiceId: 'S1', amount: 100 }], amount: 100, date: '2027-01-01' }];
+        records.opening_balances = [{ id: 'OB', type: 'buyer_receivable', partyName: 'Ali', amount: 50, receivedAmount: 50, date: '2026-01-01' }];
+        records.opening_balance_payments = [{ id: 'OP1', openingBalanceId: 'OB', type: 'buyer_receivable', amount: 50, date: '2027-01-01' }];
+        const rows = await api.AgingReports.buildRows();
+        assert.equal(rows.farmerRows.find(r => r.source === 'P1').balance, 100);
+        assert.equal(rows.buyerRows.find(r => r.source === 'S1').balance, 100);
+        assert.equal(rows.buyerRows.find(r => r.source === 'Opening Balance').balance, 50);
+    });
+    await check('Cash book applies capital opening balances only when effective', async () => {
+        records.capital_accounts = [
+            { id: 'old', name: 'Old', openingBalance: 100, createdAt: '2026-02-01T00:00:00.000Z' },
+            { id: 'current', name: 'Current', openingBalance: 50, createdAt: '2026-01-15T00:00:00.000Z' }
+        ];
+        form({ 'cb-account': '', 'cb-from': '2026-01-01', 'cb-to': '2026-01-31' });
+        await api.FinanceReports.renderCashBook();
+        assert.equal(api.FinanceReports.cashBookRows[0].balance, 0);
+        assert.equal(api.FinanceReports.cashBookRows[1].balance, 50);
+        assert.equal(api.FinanceReports.cashBookRows.length, 2);
+    });
+    await check('Finance export rebuilds rows from the current filters every time', async () => {
+        let builds = 0;
+        api.FinanceReports.cashBookRows = [{ stale: true }];
+        api.FinanceReports.renderCashBook = async () => { builds++; api.FinanceReports.cashBookRows = [{ current: true }]; };
+        await api.FinanceReports.exportCashBook();
+        assert.equal(builds, 1);
+        assert.equal(context.lastExport.wb.Sheets['Cash Book'][0].current, true);
     });
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]);

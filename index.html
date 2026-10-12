@@ -93,7 +93,7 @@
                 <i data-lucide="notebook-tabs"></i> Cash Book
             </div>
             <div class="nav-item" data-section="trial-balance" onclick="App.navigate('trial-balance')">
-                <i data-lucide="scale"></i> Trial Balance
+                <i data-lucide="scale"></i> Period Journal Summary
             </div>
             <div class="nav-item" data-section="general-ledger" onclick="App.navigate('general-ledger')">
                 <i data-lucide="library-big"></i> General Ledger
@@ -721,7 +721,7 @@
                                 <th>Party / Person Name</th>
                                 <th class="text-right">Total Given</th>
                                 <th class="text-right">Total Repaid</th>
-                                <th class="text-right">Net Receivable</th>
+                                <th class="text-right">Net Receivable / Credit Due</th>
                                 <th>Status</th>
                                 <th class="text-right">Quick Actions</th>
                             </tr>
@@ -806,7 +806,7 @@
         <!-- ===== TRIAL BALANCE ===== -->
         <div class="section" id="sec-trial-balance">
             <div class="page-header">
-                <div><h1 class="page-title">Trial Balance</h1><p class="page-title-sub">Debit and credit totals by account</p></div>
+                <div><h1 class="page-title">Period Journal Summary</h1><p class="page-title-sub">Debit and credit activity by account within the selected dates</p></div>
                 <div class="page-actions"><button class="btn btn-ghost" onclick="FinanceReports.exportTrialBalance()"><i data-lucide="file-spreadsheet"></i> Excel</button></div>
             </div>
             <div class="filter-bar">
