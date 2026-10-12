@@ -16,7 +16,7 @@ const context = vm.createContext({ console: { log() {}, warn() {}, error() {} },
 context.XLSX = { utils: { json_to_sheet: rows => rows, book_new: () => ({ SheetNames: [], Sheets: {} }), book_append_sheet: (wb, sheet, name) => { wb.Sheets[name] = sheet; wb.SheetNames.push(name); } }, writeFile: (wb, name) => { context.lastExport = { wb, name }; } };
 const files = fs.readdirSync(path.join(root, 'js')).filter(f => f.endsWith('.js'));
 for (const file of files) vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), context, { filename: file });
-const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, CropAnalysis, StockAdjustments, Settings, PaymentService, InventoryLots, PurchaseList, SaleList, OpeningBalances, AgingReports, FinanceReports, DebtsMgmt})', context);
+const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, CropAnalysis, StockAdjustments, Settings, PaymentService, InventoryLots, PurchaseList, SaleList, OpeningBalances, AgingReports, FinanceReports, DebtsMgmt, Expenses, CapitalMgmt})', context);
 const originalImport = api.DB.importAll;
 const originalBuyerRender = api.Buyers.render;
 let records = {}, seq = 0;
@@ -54,6 +54,7 @@ api.Utils.confirm = async () => true;
 api.Utils.populateCapitalAccountSelect = async () => {};
 api.Utils.getActiveSeason = async () => (records.seasons || []).find(s => s.active) || null;
 for (const module of [api.PurchasePayments, api.SalePayments, api.BankAccounts, api.Farmers, api.Buyers]) module.render = async () => {};
+api.Expenses.render = api.CapitalMgmt.render = async () => {};
 api.SeasonManager.renderSidebarBadge = async () => {};
 const results = [];
 async function check(name, fn) {
@@ -464,6 +465,42 @@ const sale = (id, extra = {}) => ({ id, buyerName: 'Ali', crop: 'Wheat', date: '
         await api.FinanceReports.exportCashBook();
         assert.equal(builds, 1);
         assert.equal(context.lastExport.wb.Sheets['Cash Book'][0].current, true);
+    });
+    await check('Expense and cash movement save atomically with legacy link retained', async () => {
+        records.capital_accounts = [{ id: 'cash', name: 'Cash', type: 'cash', openingBalance: 0 }];
+        form({ 'exp-amount': '25', 'exp-date': '2026-12-31', 'exp-type': 'Labour', 'exp-desc': 'Picking', 'exp-crop': 'Wheat', 'exp-receipt': '', 'exp-account': 'cash' });
+        await api.Expenses.save();
+        assert.equal(records.expenses.length, 1);
+        assert.equal(records.capital_transactions.length, 1);
+        assert.equal(records.expenses[0].capitalTxId, records.capital_transactions[0].id);
+        const expense = records.expenses[0];
+        const linked = records.capital_transactions[0];
+        linked.sourceStore = '';
+        linked.sourceId = '';
+        linked.category = 'expense';
+        linked.referenceId = expense.id;
+        await api.DB.put('capital_transactions', linked);
+        await api.Expenses.delete(expense.id);
+        assert.equal(await api.DB.get('expenses', expense.id), undefined);
+        assert.equal(await api.DB.get('capital_transactions', linked.id), undefined);
+    });
+    await check('Failed expense commit leaves no expense or cash transaction', async () => {
+        records.capital_accounts = [{ id: 'cash', name: 'Cash', type: 'cash', openingBalance: 0 }];
+        form({ 'exp-amount': '25', 'exp-date': '2026-12-31', 'exp-type': 'Labour', 'exp-desc': '', 'exp-crop': '', 'exp-receipt': '', 'exp-account': 'cash' });
+        const commit = api.DB.commitUnitOfWork;
+        api.DB.commitUnitOfWork = async () => { throw new Error('simulated commit failure'); };
+        await api.Expenses.save();
+        api.DB.commitUnitOfWork = commit;
+        assert.equal((records.expenses || []).length, 0);
+        assert.equal((records.capital_transactions || []).length, 0);
+    });
+    await check('Capital contribution and bank movement save atomically', async () => {
+        records.capital_accounts = [{ id: 'cash', name: 'Cash', type: 'cash', openingBalance: 0 }];
+        form({ 'cap-entry-type': 'contribution', 'cap-entry-amount': '50', 'cap-entry-date': '2026-12-31', 'cap-entry-desc': 'Owner funds', 'cap-entry-account': 'cash' });
+        await api.CapitalMgmt.saveEntry();
+        assert.equal(records.capital_entries.length, 1);
+        assert.equal(records.capital_transactions.length, 1);
+        assert.equal(records.capital_entries[0].linkedTxId, records.capital_transactions[0].id);
     });
     const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]);

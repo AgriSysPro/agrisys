@@ -11,7 +11,8 @@ const BankAccounts = {
     async renderStats() {
         const accounts = await DB.getAll('capital_accounts');
         const activeSeason = await Utils.getActiveSeason();
-        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
+        const allTransactions = await DB.getAll('capital_transactions');
+        const transactions = Utils.filterBySeason(allTransactions, activeSeason);
         const totalOpening = accounts.reduce((s, a) => s + (a.openingBalance || 0), 0);
         let currentTotal = 0;
         let totalDeposits = 0;
@@ -20,7 +21,7 @@ const BankAccounts = {
             const txs = transactions.filter(t => t.accountId === a.id);
             const deposits = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
             const withdrawals = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
-            currentTotal += (a.openingBalance || 0) + deposits - withdrawals;
+            currentTotal += Utils.capitalAccountBalance(a, allTransactions);
             totalDeposits += deposits;
             totalWithdrawals += withdrawals;
         });
@@ -36,7 +37,8 @@ const BankAccounts = {
     async renderAccounts() {
         const accounts = await DB.getAll('capital_accounts');
         const activeSeason = await Utils.getActiveSeason();
-        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
+        const allTransactions = await DB.getAll('capital_transactions');
+        const transactions = Utils.filterBySeason(allTransactions, activeSeason);
         const container = document.getElementById('capital-account-cards');
 
         if (accounts.length === 0) {
@@ -52,7 +54,7 @@ const BankAccounts = {
             const txs = transactions.filter(t => t.accountId === a.id).sort((x, y) => new Date(x.date) - new Date(y.date));
             const dep = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
             const wdr = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
-            const current = (a.openingBalance || 0) + dep - wdr;
+            const current = Utils.capitalAccountBalance(a, allTransactions);
             const sparkSvg = this.generateSparkline(txs, a.openingBalance || 0);
             const isCash = a.type === 'cash';
             const icon = isCash ? 'wallet' : 'landmark';
@@ -691,7 +693,8 @@ const BankAccounts = {
         if (!Utils.requireExcel()) return;
         const accounts = await DB.getAll('capital_accounts');
         const activeSeason = await Utils.getActiveSeason();
-        const transactions = Utils.filterBySeason(await DB.getAll('capital_transactions'), activeSeason);
+        const allTransactions = await DB.getAll('capital_transactions');
+        const transactions = Utils.filterBySeason(allTransactions, activeSeason);
 
         const wb = XLSX.utils.book_new();
 
@@ -708,7 +711,7 @@ const BankAccounts = {
                     'Branch': a.branch || '',
                     'IBAN': a.iban || '',
                     'Opening Balance': a.openingBalance || 0,
-                    'Current Balance': (a.openingBalance || 0) + dep - wdr,
+                    'Current Balance': Utils.capitalAccountBalance(a, allTransactions),
                     'Created At': Utils.formatDate(a.createdAt)
                 };
             });

@@ -621,7 +621,7 @@ const PurchaseList = {
             </div></td>
         </tr>`).join('');
 
-        Utils.renderPagination('purchase-pagination', this.currentPage, totalPages, 'PurchaseList.render');
+        Utils.renderPagination('purchase-pagination', this.currentPage, totalPages, page => PurchaseList.render(page));
     },
 
     async delete(id) {

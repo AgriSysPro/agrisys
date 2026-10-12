@@ -434,7 +434,7 @@ const SaleList = {
             </div></td>
         </tr>`).join('') || '<tr><td colspan="9" class="text-center" style="color:var(--text-muted)">No sales yet</td></tr>';
 
-        Utils.renderPagination('sale-pagination', this.currentPage, totalPages, 'SaleList.render');
+        Utils.renderPagination('sale-pagination', this.currentPage, totalPages, page => SaleList.render(page));
     },
     async delete(id) {
         const snapshot = await DB.financialSnapshot();

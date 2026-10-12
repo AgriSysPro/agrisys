@@ -830,20 +830,25 @@ const FinanceReports = {
         const accountMap = Object.fromEntries(accounts.map(a => [a.id, a]));
         const openingDate = account => account.createdAt ? String(account.createdAt).slice(0, 10) : '';
         const eligibleAccounts = selectedAccounts.filter(a => !to || !openingDate(a) || openingDate(a) <= to);
-        const opening = eligibleAccounts.filter(a => !from || !openingDate(a) || openingDate(a) <= from).reduce((s, a) => s + (a.openingBalance || 0), 0);
-        const openingEvents = from ? eligibleAccounts.filter(a => openingDate(a) > from && (!to || openingDate(a) <= to) && (a.openingBalance || 0) !== 0)
+        let opening;
+        if (from) {
+            const priorDate = new Date(new Date(`${from}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
+            opening = eligibleAccounts.reduce((sum, account) => sum + Utils.capitalAccountBalance(account, transactions, priorDate), 0);
+            const knownAccountIds = new Set(eligibleAccounts.map(account => account.id));
+            opening += transactions.filter(tx => !knownAccountIds.has(tx.accountId) && tx.date < from)
+                .reduce((sum, tx) => sum + (tx.type === 'deposit' ? 1 : tx.type === 'withdrawal' ? -1 : 0) * (tx.amount || 0), 0);
+        } else {
+            opening = eligibleAccounts.reduce((sum, account) => sum + (account.openingBalance || 0), 0);
+        }
+        const openingEvents = from ? eligibleAccounts.filter(a => openingDate(a) >= from && (!to || openingDate(a) <= to) && (a.openingBalance || 0) !== 0)
             .map(a => ({ id: `opening-${a.id}`, accountId: a.id, date: openingDate(a), type: a.openingBalance > 0 ? 'deposit' : 'withdrawal', amount: Math.abs(a.openingBalance),
                 description: `Opening balance: ${a.name}`, isReconciled: true, openingEvent: true })) : [];
         const sorted = [...transactions, ...openingEvents].sort((a, b) => a.date.localeCompare(b.date)
             || Number(Boolean(b.openingEvent)) - Number(Boolean(a.openingEvent)));
         let running = opening;
-        sorted.filter(t => from && t.date < from).forEach(t => {
-            if (t.type === 'deposit') running += t.amount || 0;
-            else running -= t.amount || 0;
-        });
         const allRows = [{
             date: '',
-            account: accountId ? accountMap[accountId]?.name || '' : 'All Accounts',
+            account: accountId ? accountMap[accountId]?.name || '' : 'Aggregate Cash/Bank Balance',
             description: from ? 'Balance Brought Forward' : 'Opening Balance',
             deposit: 0,
             withdrawal: 0,

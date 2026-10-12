@@ -61,7 +61,7 @@ const CropAnalysis = {
         });
     },
 
-    computeMetrics(crop, purchases, sales, expenses) {
+    computeMetrics(crop, purchases, sales, expenses, inventoryHistory = null) {
         // Filter by crop (empty = all)
         const cropLower = (crop || '').trim().toLowerCase();
         const fp = cropLower ? purchases.filter(p => p.crop && p.crop.trim().toLowerCase() === cropLower) : purchases;
@@ -90,9 +90,12 @@ const CropAnalysis = {
         const saleReceived = Utils.sumBy(actualSales, 'amountReceived');
         const saleBalance = saleAmount - saleReceived;
 
+        const inventoryPurchases = inventoryHistory?.purchases || fp;
+        const inventorySales = inventoryHistory?.sales || fs;
+        const inventoryExpenses = inventoryHistory?.expenses || fe;
         // Net inventory
-        const stockInWeight = Utils.sumBy(fp, 'netWeight');
-        const stockOutWeight = Utils.sumBy(fs, 'netWeight');
+        const stockInWeight = Utils.sumBy(inventoryPurchases.filter(p => !cropLower || String(p.crop || '').trim().toLowerCase() === cropLower), 'netWeight');
+        const stockOutWeight = Utils.sumBy(inventorySales.filter(s => !cropLower || String(s.crop || '').trim().toLowerCase() === cropLower), 'netWeight');
         const netWeight = stockInWeight - stockOutWeight;
         const netMaund = netWeight / 40;
 
@@ -112,11 +115,12 @@ const CropAnalysis = {
         const effectiveCostPerMn = purchaseMaund > 0 ? (purchaseAmount + totalExpenses) / purchaseMaund : 0;
 
         // Use lots logic to determine COGS
-        const lotsInfo = Utils.calculateInventoryLots(fp, fs, fe);
+        const lotsInfo = Utils.calculateInventoryLots(inventoryPurchases, inventorySales, inventoryExpenses);
+        const periodSaleIds = new Set(actualSales.map(s => s.id));
         let totalCogs = 0;
         let inventoryValue = 0;
         Object.values(lotsInfo).forEach(lot => {
-            totalCogs += lot.cogs || 0;
+            totalCogs += Object.entries(lot.saleCogs || {}).reduce((sum, [saleId, cogs]) => sum + (periodSaleIds.has(saleId) ? cogs : 0), 0);
             inventoryValue += lot.inventoryValue || 0;
         });
 
@@ -541,49 +545,38 @@ const CropAnalysis = {
         this.selectedCrop = sel.value;
         const { fromDate, toDate } = this.getDateRange();
 
-        let purchases, sales, expenses, stockAdjustments;
-        if (fromDate || toDate) {
-            try {
-                purchases = await DB.getByDateRange('purchases', fromDate, toDate);
-                sales = await DB.getByDateRange('sales', fromDate, toDate);
-                expenses = await DB.getByDateRange('expenses', fromDate, toDate);
-                stockAdjustments = await DB.getByDateRange('stock_adjustments', fromDate, toDate);
-            } catch (e) {
-                purchases = await DB.getAll('purchases');
-                sales = await DB.getAll('sales');
-                expenses = await DB.getAll('expenses');
-                stockAdjustments = await DB.getAll('stock_adjustments');
-            }
-        } else {
-            purchases = await DB.getAll('purchases');
-            sales = await DB.getAll('sales');
-            expenses = await DB.getAll('expenses');
-            stockAdjustments = await DB.getAll('stock_adjustments');
-        }
-
-        const adjustedStock = Utils.applyStockAdjustments(purchases, sales, stockAdjustments);
-        purchases = adjustedStock.purchases;
-        sales = adjustedStock.sales;
-
-        let rawPurchases = purchases;
-        let rawSales = sales;
-        let rawExpenses = expenses;
+        let [rawPurchases, rawSales, rawExpenses, rawAdjustments] = await Promise.all([
+            DB.getAll('purchases'), DB.getAll('sales'), DB.getAll('expenses'), DB.getAll('stock_adjustments')
+        ]);
 
         // Apply season filter if active
         const activeSeason = typeof SeasonManager !== 'undefined' ? await SeasonManager.getActiveSeason() : null;
         if (activeSeason) {
-            purchases = SeasonManager.filterByActiveSeason(rawPurchases, activeSeason);
-            sales = SeasonManager.filterByActiveSeason(rawSales, activeSeason);
-            expenses = SeasonManager.filterByActiveSeason(rawExpenses, activeSeason);
+            rawPurchases = SeasonManager.filterByActiveSeason(rawPurchases, activeSeason);
+            rawSales = SeasonManager.filterByActiveSeason(rawSales, activeSeason);
+            rawExpenses = SeasonManager.filterByActiveSeason(rawExpenses, activeSeason);
+            rawAdjustments = SeasonManager.filterByActiveSeason(rawAdjustments, activeSeason);
         }
 
-        // Apply date range filter
-        purchases = this.filterByDateRange(purchases, fromDate, toDate);
-        sales = this.filterByDateRange(sales, fromDate, toDate);
-        expenses = this.filterByDateRange(expenses, fromDate, toDate);
+        // Build inventory through the report end date so FIFO COGS includes prior lots and sales.
+        const inventoryPurchases = this.filterByDateRange(rawPurchases, '', toDate);
+        const inventorySales = this.filterByDateRange(rawSales, '', toDate);
+        const inventoryExpenses = this.filterByDateRange(rawExpenses, '', toDate);
+        const inventoryAdjustments = this.filterByDateRange(rawAdjustments, '', toDate);
+        const adjustedStock = Utils.applyStockAdjustments(inventoryPurchases, inventorySales, inventoryAdjustments);
+        const inventoryHistory = {
+            purchases: adjustedStock.purchases,
+            sales: adjustedStock.sales,
+            expenses: inventoryExpenses
+        };
+
+        // Period activity remains limited to the selected report dates.
+        const purchases = this.filterByDateRange(inventoryHistory.purchases, fromDate, toDate);
+        const sales = this.filterByDateRange(inventoryHistory.sales, fromDate, toDate);
+        const expenses = this.filterByDateRange(inventoryExpenses, fromDate, toDate);
 
         // Filter by crop for metrics
-        const m = this.computeMetrics(this.selectedCrop, purchases, sales, expenses);
+        const m = this.computeMetrics(this.selectedCrop, purchases, sales, expenses, inventoryHistory);
 
         // Check if there's any data at all
         if (m.purchaseCount === 0 && m.saleCount === 0 && m.totalExpenses === 0) {
@@ -606,8 +599,9 @@ const CropAnalysis = {
         Utils.safeCreateIcons();
 
         // Render the rate trend chart on canvas (after DOM update)
-        const cropPurchases = this.selectedCrop ? purchases.filter(p => p.crop === this.selectedCrop) : purchases;
-        const cropSales = this.selectedCrop ? sales.filter(s => s.crop === this.selectedCrop) : sales;
+        const cropKey = String(this.selectedCrop || '').trim().toLowerCase();
+        const cropPurchases = cropKey ? purchases.filter(p => String(p.crop || '').trim().toLowerCase() === cropKey) : purchases;
+        const cropSales = cropKey ? sales.filter(s => String(s.crop || '').trim().toLowerCase() === cropKey) : sales;
         setTimeout(() => this.renderRateTrendChart(cropPurchases, cropSales, fromDate, toDate), 50);
     }
 };

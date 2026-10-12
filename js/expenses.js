@@ -35,12 +35,18 @@ const Expenses = {
         const activeSeason = await Utils.getActiveSeason();
         const purchases = Utils.filterBySeason(await DB.getAll('purchases'), activeSeason);
         const expenses = Utils.filterBySeason(await DB.getAll('expenses'), activeSeason);
-        const crops = [...new Set([...purchases.map(p => p.crop), ...expenses.map(e => e.crop).filter(c => c)])];
+        const cropLabels = new Map();
+        [...purchases.map(p => p.crop), ...expenses.map(e => e.crop)].filter(Boolean).forEach(crop => {
+            const key = String(crop).trim().toLocaleLowerCase();
+            if (key && !cropLabels.has(key)) cropLabels.set(key, String(crop).trim());
+        });
+        const crops = [...cropLabels.values()];
 
         let html = '<div class="stats-grid">';
         crops.forEach(crop => {
-            const cp = purchases.filter(p => p.crop === crop);
-            const ce = expenses.filter(e => e.crop === crop);
+            const cropKey = crop.toLocaleLowerCase();
+            const cp = purchases.filter(p => String(p.crop || '').trim().toLocaleLowerCase() === cropKey);
+            const ce = expenses.filter(e => String(e.crop || '').trim().toLocaleLowerCase() === cropKey);
             const purchaseCost = cp.reduce((s, p) => s + Utils.purchaseCostAmount(p), 0);
             const expenseCost = ce.reduce((s, e) => s + (e.amount || 0), 0);
             const totalCost = purchaseCost + expenseCost;
@@ -61,7 +67,8 @@ const Expenses = {
         document.getElementById('exp-date').value = Utils.todayISO();
         document.getElementById('exp-desc').value = '';
         document.getElementById('exp-amount').value = '';
-        document.getElementById('exp-type').value = 'labour';
+        const typeSelect = document.getElementById('exp-type');
+        if (![...typeSelect.options].some(option => option.value === typeSelect.value)) typeSelect.selectedIndex = 0;
         document.getElementById('exp-crop').value = '';
         // Populate receipt dropdown
         this.populateReceiptSelect();
@@ -82,11 +89,15 @@ const Expenses = {
     async save() {
         const amount = Utils.pf(document.getElementById('exp-amount').value);
         if (amount <= 0) { Utils.showToast('Amount required', 'error'); return; }
+        const date = document.getElementById('exp-date').value;
+        const type = document.getElementById('exp-type').value;
+        if (!date) { Utils.showToast('Expense date is required', 'error'); document.getElementById('exp-date').focus(); return; }
+        if (!type) { Utils.showToast('Expense type is required', 'error'); document.getElementById('exp-type').focus(); return; }
         if (!document.getElementById('exp-account').value) { Utils.showToast('Select cash/bank account for this expense', 'error'); return; }
         const data = {
             id: Utils.generateId(),
-            date: document.getElementById('exp-date').value,
-            type: document.getElementById('exp-type').value,
+            date,
+            type,
             description: document.getElementById('exp-desc').value.trim(),
             amount,
             crop: document.getElementById('exp-crop').value,
@@ -94,26 +105,24 @@ const Expenses = {
             accountId: document.getElementById('exp-account').value,
             createdAt: new Date().toISOString()
         };
-        await DB.put('expenses', data);
-        const tx = await Utils.createLinkedCapitalTx({
-            accountId: data.accountId,
-            type: 'withdrawal',
-            amount,
-            date: data.date,
+        const snapshot = await DB.financialSnapshot();
+        const tx = { id: Utils.generateId(), accountId: data.accountId, type: 'withdrawal', amount, date: data.date,
             description: `Expense: ${data.type}${data.description ? ' - ' + data.description : ''}`,
-            sourceStore: 'expenses',
-            sourceId: data.id
-        });
-        if (tx) {
-            data.capitalTxId = tx.id;
-            await DB.put('expenses', data);
-        }
-        await Utils.audit('create', 'expense', data.id, {
+            sourceStore: 'expenses', sourceId: data.id, isReconciled: false, createdAt: new Date().toISOString() };
+        data.capitalTxId = tx.id;
+        const audit = Utils.createAuditRecord('create', 'expense', data.id, {
             amount,
             type: data.type,
             accountId: data.accountId || null,
             capitalTxId: data.capitalTxId || null
         });
+        try {
+            await DB.commitUnitOfWork([
+                { storeName: 'expenses', action: 'put', data },
+                { storeName: 'capital_transactions', action: 'put', data: tx },
+                { storeName: 'audit_logs', action: 'put', data: audit }
+            ], snapshot);
+        } catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Expense not saved: ${error.message}`, 'error'); return; }
         Utils.hideModal('expense-modal');
         Utils.showToast('Expense saved!');
         this.render();
@@ -123,15 +132,18 @@ const Expenses = {
         const expense = await DB.get('expenses', id);
         if (!expense) return;
         const allTx = await DB.getAll('capital_transactions');
-        const linkedTx = allTx.filter(t => t.sourceStore === 'expenses' && t.sourceId === id);
+        const linkedTx = allTx.filter(t => (t.sourceStore === 'expenses' && t.sourceId === id) || t.id === expense.capitalTxId || (t.referenceId === id && ['expense', 'expenses'].includes(String(t.category || '').toLowerCase())));
         if (!await Utils.confirm(`Delete this expense?${linkedTx.length ? ' A linked capital transaction will also be removed.' : ''}`)) return;
-        for (const tx of linkedTx) await DB.delete('capital_transactions', tx.id);
-        await DB.delete('expenses', id);
-        await Utils.audit('delete', 'expense', id, {
+        const snapshot = await DB.financialSnapshot();
+        const ops = linkedTx.map(tx => ({ storeName: 'capital_transactions', action: 'delete', key: tx.id, softDelete: true, data: tx }));
+        ops.push({ storeName: 'expenses', action: 'delete', key: id, softDelete: true, data: expense });
+        ops.push({ storeName: 'audit_logs', action: 'put', data: Utils.createAuditRecord('delete', 'expense', id, {
             oldAmount: expense.amount || 0,
             oldRecord: expense,
             deletedCapitalTransactions: linkedTx.map(t => t.id)
-        });
+        }) });
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Expense not deleted: ${error.message}`, 'error'); return; }
         Utils.showToast('Deleted!');
         this.render();
     },

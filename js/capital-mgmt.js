@@ -10,9 +10,9 @@ const CapitalMgmt = {
     async renderStats() {
         const summary = await this.getCapitalSummary();
         document.getElementById('capital-mgmt-stats').innerHTML = `
-            <div class="stat-card green"><div class="stat-label">Total Contributions</div><div class="stat-value">PKR ${Utils.formatPKR(summary.totalContributions)}</div></div>
-            <div class="stat-card orange"><div class="stat-label">Total Drawings</div><div class="stat-value">PKR ${Utils.formatPKR(summary.totalDrawings)}</div></div>
-            <div class="stat-card blue"><div class="stat-label">Net Owner Capital</div><div class="stat-value">PKR ${Utils.formatPKR(summary.netCapital)}</div></div>
+            <div class="stat-card green"><div class="stat-label">Total Contributions</div><div class="stat-value">PKR ${Utils.formatPKR(summary.totalContributions)}</div><div class="stat-sub">All time</div></div>
+            <div class="stat-card orange"><div class="stat-label">Total Drawings</div><div class="stat-value">PKR ${Utils.formatPKR(summary.totalDrawings)}</div><div class="stat-sub">All time</div></div>
+            <div class="stat-card blue"><div class="stat-label">Net Owner Capital</div><div class="stat-value">PKR ${Utils.formatPKR(summary.netCapital)}</div><div class="stat-sub">All time</div></div>
         `;
     },
 
@@ -90,13 +90,14 @@ const CapitalMgmt = {
         let linkedTxId = null;
 
         // If linked to a bank/cash account, create matching bank transaction
+        const ops = [];
         if (accountId) {
             linkedTxId = Utils.generateId();
             const account = await DB.get('capital_accounts', accountId);
             const txType = type === 'contribution' ? 'deposit' : 'withdrawal';
             const txDesc = desc || (type === 'contribution' ? 'Capital contribution' : 'Owner drawing');
 
-            await DB.put('capital_transactions', {
+            ops.push({ storeName: 'capital_transactions', action: 'put', data: {
                 id: linkedTxId,
                 accountId,
                 type: txType,
@@ -107,11 +108,10 @@ const CapitalMgmt = {
                 sourceStore: 'capital_entries',
                 sourceId: entryId,
                 createdAt: new Date().toISOString()
-            });
+            } });
         }
 
-        // Save the capital entry
-        await DB.put('capital_entries', {
+        const entry = {
             id: entryId,
             type,
             amount,
@@ -120,7 +120,11 @@ const CapitalMgmt = {
             accountId,
             linkedTxId,
             createdAt: new Date().toISOString()
-        });
+        };
+        ops.push({ storeName: 'capital_entries', action: 'put', data: entry });
+        ops.push({ storeName: 'audit_logs', action: 'put', data: Utils.createAuditRecord('create', 'capital_entry', entryId, { type, amount, accountId }) });
+        try { await DB.commitUnitOfWork(ops, await DB.financialSnapshot()); }
+        catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Capital entry not saved: ${error.message}`, 'error'); return; }
 
         Utils.hideModal('capital-entry-modal');
         Utils.showToast(type === 'contribution' ? 'Contribution recorded!' : 'Drawing recorded!');
@@ -129,17 +133,22 @@ const CapitalMgmt = {
 
     // ── Delete Entry ──
     async deleteEntry(id) {
-        if (!await Utils.confirm('Delete this capital entry?')) return;
         const entry = await DB.get('capital_entries', id);
-        if (entry && entry.sourceStore === 'opening_balances' && entry.sourceId) {
-            await DB.delete('opening_balances', entry.sourceId);
-            await Utils.deleteLinkedCapitalTx('opening_balances', entry.sourceId);
+        if (!entry) return;
+        if (!await Utils.confirm('Delete this capital entry?')) return;
+        const snapshot = await DB.financialSnapshot();
+        const ops = [{ storeName: 'capital_entries', action: 'delete', key: id, softDelete: true, data: entry }];
+        if (entry.sourceStore === 'opening_balances' && entry.sourceId) {
+            const opening = await DB.get('opening_balances', entry.sourceId);
+            if (opening) ops.push({ storeName: 'opening_balances', action: 'delete', key: opening.id, softDelete: true, data: opening });
         }
-        if (entry && entry.linkedTxId) {
-            // Also delete the linked bank transaction
-            try { await DB.delete('capital_transactions', entry.linkedTxId); } catch (e) { /* may already be deleted */ }
-        }
-        await DB.delete('capital_entries', id);
+        const linkedTxs = (await DB.getAll('capital_transactions')).filter(tx => tx.id === entry.linkedTxId ||
+            (tx.sourceStore === 'capital_entries' && tx.sourceId === id) ||
+            (entry.sourceStore === 'opening_balances' && tx.sourceStore === 'opening_balances' && tx.sourceId === entry.sourceId));
+        linkedTxs.forEach(tx => ops.push({ storeName: 'capital_transactions', action: 'delete', key: tx.id, softDelete: true, data: tx }));
+        ops.push({ storeName: 'audit_logs', action: 'put', data: Utils.createAuditRecord('delete', 'capital_entry', id, { oldRecord: entry, deletedCapitalTransactions: linkedTxs.map(tx => tx.id) }) });
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Capital entry not deleted: ${error.message}`, 'error'); return; }
         Utils.showToast('Deleted!');
         this.render();
     },

@@ -91,7 +91,8 @@ const PartnersMgmt = {
             totalAllocatedProfit,
             totalPercentage,
             netPartnerCapital: totalContributions - totalDrawings - totalProfitPayouts,
-            businessNetProfit: netProfit
+            businessNetProfit: netProfit,
+            profitPeriodLabel: activeSeason ? `${activeSeason.name || 'Active season'} (${activeSeason.startDate || 'start'} to ${activeSeason.endDate || 'present'})` : 'All time'
         };
     },
 
@@ -118,7 +119,7 @@ const PartnersMgmt = {
                     <div class="stat-value" style="color:${summary.businessNetProfit >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">
                         PKR ${Utils.formatPKR(summary.businessNetProfit)}
                     </div>
-                    <div class="stat-sub">Allocated across agreed partner % ratios</div>
+                    <div class="stat-sub">${Utils.escapeHTML(summary.profitPeriodLabel)} · allocated by agreed partner shares</div>
                 </div>
                 <div class="stat-card purple">
                     <div class="stat-label">Net Partners Equity</div>
@@ -309,19 +310,25 @@ const PartnersMgmt = {
 
     // ── Delete Partner ──
     async deletePartner(id) {
+        const snapshot = await DB.financialSnapshot();
         const partner = await DB.get('partners', id);
         if (!partner) return;
         
         const txs = await DB.getAll('partner_transactions') || [];
         const linked = txs.filter(t => t.partnerId === id);
 
-        let msg = `Delete partner "${partner.name}"?`;
         if (linked.length > 0) {
-            msg = `Partner "${partner.name}" has ${linked.length} linked transactions. Only the profile will be removed. Continue?`;
+            Utils.showToast(`Cannot delete ${partner.name}: ${linked.length} linked transaction(s) must remain attached to its profile.`, 'warning');
+            return;
         }
-        if (!await Utils.confirm(msg)) return;
+        if (!await Utils.confirm(`Delete partner "${partner.name}"?`)) return;
 
-        await DB.delete('partners', id);
+        try {
+            await DB.commitUnitOfWork([
+                { storeName: 'partners', action: 'delete', key: id, data: partner },
+                { storeName: 'audit_logs', action: 'put', data: Utils.createAuditRecord('delete', 'partner', id, { oldRecord: partner }) }
+            ], snapshot);
+        } catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Partner not deleted: ${error.message}`, 'error'); return; }
         Utils.showToast('Partner deleted!');
         await this.render();
     },
@@ -338,7 +345,7 @@ const PartnersMgmt = {
         this.onTxTypeChange();
 
         const pSel = document.getElementById('partner-tx-partner');
-        pSel.innerHTML = partners.map(p => `<option value="${p.id}" ${p.id === defaultPartnerId ? 'selected' : ''}>${Utils.escapeHTML(p.name)} (${Utils.pf(p.sharePercentage)}% share)</option>`).join('');
+        pSel.innerHTML = partners.map(p => `<option value="${Utils.escapeHTML(p.id)}" ${p.id === defaultPartnerId ? 'selected' : ''}>${Utils.escapeHTML(p.name)} (${Utils.pf(p.sharePercentage)}% share)</option>`).join('');
         if (defaultPartnerId) pSel.value = defaultPartnerId;
 
         document.getElementById('partner-tx-amount').value = '';
@@ -347,9 +354,10 @@ const PartnersMgmt = {
 
         // Populate bank account dropdown
         const accounts = await DB.getAll('capital_accounts') || [];
+        const capitalTransactions = await DB.getAll('capital_transactions') || [];
         const accSel = document.getElementById('partner-tx-account');
         accSel.innerHTML = '<option value="">— None (No bank account link) —</option>' +
-            accounts.map(a => `<option value="${a.id}">${Utils.escapeHTML(a.name)} (${a.type} - Bal: ${Utils.formatPKR(a.balance)})</option>`).join('');
+            accounts.map(a => `<option value="${Utils.escapeHTML(a.id)}">${Utils.escapeHTML(a.name)} (${Utils.escapeHTML(a.type)} - Bal: ${Utils.formatPKR(Utils.capitalAccountBalance(a, capitalTransactions))})</option>`).join('');
         if (accounts.length > 0) accSel.value = accounts[0].id;
 
         Utils.showModal('partner-tx-modal');
@@ -384,7 +392,9 @@ const PartnersMgmt = {
         if (!partnerId) { Utils.showToast('Please select a partner', 'error'); return; }
         if (amount <= 0) { Utils.showToast('Amount must be greater than zero', 'error'); return; }
 
+        const snapshot = await DB.financialSnapshot();
         const partner = await DB.get('partners', partnerId);
+        if (!partner) { Utils.showToast('Selected partner no longer exists. Refresh and retry.', 'error'); return; }
         const txId = Utils.generateId();
         let linkedTxId = null;
         const ops = [];
@@ -424,23 +434,21 @@ const PartnersMgmt = {
             createdAt: new Date().toISOString()
         };
         ops.push({ storeName: 'partner_transactions', action: 'put', data: record });
+        ops.push({ storeName: 'audit_logs', action: 'put', data: Utils.createAuditRecord('create', 'partner_transaction', txId, { partnerId, type, amount, accountId }) });
 
-        await DB.commitUnitOfWork(ops);
-
-        // 3. Record Double-Entry Bookkeeping Journal
-        if (typeof Bookkeeping !== 'undefined' && Bookkeeping.recordPartnerTx) {
-            await Bookkeeping.recordPartnerTx(record, partner);
-        }
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Partner transaction not saved: ${error.message}`, 'error'); return; }
 
         Utils.hideModal('partner-tx-modal');
-        Utils.showToast('Partner transaction saved and synchronized!');
+        Utils.showToast('Partner transaction saved. Bookkeeping entries update automatically.');
         await this.render();
     },
 
     // ── Delete Partner Transaction ──
     async deleteTx(id) {
-        if (!await Utils.confirm('Delete this partner transaction? This will automatically adjust linked Bank Account balances and remove bookkeeping journal records.')) return;
+        if (!await Utils.confirm('Delete this partner transaction? Its linked account movement will also be removed.')) return;
 
+        const snapshot = await DB.financialSnapshot();
         const tx = await DB.get('partner_transactions', id);
         if (!tx) return;
 
@@ -461,15 +469,12 @@ const PartnersMgmt = {
             }
         }
 
-        // 2. Clean up linked Journal Entry
-        if (typeof Bookkeeping !== 'undefined' && Bookkeeping.deleteByRef) {
-            await Bookkeeping.deleteByRef(id);
-        }
-
         ops.push({ storeName: 'partner_transactions', action: 'delete', key: id, softDelete: true, data: tx });
-        await DB.commitUnitOfWork(ops);
+        ops.push({ storeName: 'audit_logs', action: 'put', data: Utils.createAuditRecord('delete', 'partner_transaction', id, { oldRecord: tx }) });
+        try { await DB.commitUnitOfWork(ops, snapshot); }
+        catch (error) { Utils.showToast(error.code === 'CONFLICT' ? error.message : `Partner transaction not deleted: ${error.message}`, 'error'); return; }
 
-        Utils.showToast('Partner transaction deleted and balances restored!');
+        Utils.showToast('Partner transaction deleted. Bookkeeping entries update automatically.');
         await this.render();
     },
 

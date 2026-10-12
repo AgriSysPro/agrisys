@@ -312,6 +312,16 @@ const Utils = {
         }
     },
 
+    createAuditRecord(action, entityType, entityId, details = {}) {
+        const id = this.generateId();
+        const date = this.todayISO();
+        const createdAt = new Date().toISOString();
+        const payload = JSON.stringify({ id, date, action, entityType, entityId, details, createdAt });
+        let hash = 0;
+        for (let i = 0; i < payload.length; i++) { hash = ((hash << 5) - hash) + payload.charCodeAt(i); hash |= 0; }
+        return { id, date, action, entityType, entityId, details, hash: hash.toString(16), createdAt };
+    },
+
     async populateCapitalAccountSelect(selectId, placeholder = 'Do not link account') {
         const sel = document.getElementById(selectId);
         if (!sel) return;
@@ -336,6 +346,17 @@ const Utils = {
         };
         await DB.put('capital_transactions', tx);
         return tx;
+    },
+
+    capitalAccountBalance(account, transactions = [], asOfDate = null) {
+        if (!account) return 0;
+        const openingDate = account.createdAt ? String(account.createdAt).slice(0, 10) : '';
+        if (asOfDate && openingDate && openingDate > asOfDate) return 0;
+        const opening = (!asOfDate || !openingDate || openingDate <= asOfDate) ? (Number(account.openingBalance) || 0) : 0;
+        const movement = transactions
+            .filter(tx => tx.accountId === account.id && (!asOfDate || String(tx.date || '').slice(0, 10) <= asOfDate))
+            .reduce((sum, tx) => sum + (tx.type === 'deposit' ? 1 : tx.type === 'withdrawal' ? -1 : 0) * (Number(tx.amount) || 0), 0);
+        return opening + movement;
     },
 
     async deleteLinkedCapitalTx(sourceStore, sourceId) {
@@ -524,9 +545,10 @@ const Utils = {
     },
 
     purchaseCostAmount(purchase) {
+        if (purchase.amount !== undefined && purchase.amount !== null) return Number(purchase.amount) || 0;
         const base = purchase.payableBeforeAdvance;
-        if (base !== undefined && base !== null) return base || 0;
-        return ((purchase.netPayableAmount ?? purchase.amount ?? 0)) + (purchase.advanceDeducted || 0);
+        if (base !== undefined && base !== null) return (Number(base) || 0) + (Number(purchase.pkrDeductionsBeforeAdvance) || 0);
+        return (Number(purchase.netPayableAmount) || 0) + (Number(purchase.advanceDeducted) || 0) + (Number(purchase.pkrDeductionsBeforeAdvance) || 0);
     },
 
     purchasePayableAmount(purchase) {
@@ -1012,7 +1034,7 @@ const Utils = {
             .forEach(p => {
                 if (!p.crop || (p.netWeight || 0) <= 0) return;
                 const key = getCropKey(p.crop);
-                const cost = (p.amount ?? this.purchaseCostAmount(p)) + (expenseByPurchase[p.id] || 0);
+                const cost = this.purchaseCostAmount(p) + (expenseByPurchase[p.id] || 0);
                 if (!lotsByCropKey[key]) lotsByCropKey[key] = [];
                 lotsByCropKey[key].push({
                     sourceId: p.id,
@@ -1080,11 +1102,15 @@ const Utils = {
             overlay = document.createElement('div');
             overlay.id = 'loading-overlay';
             overlay.className = 'loading-overlay';
-            overlay.innerHTML = `
-                <div class="loading-content">
-                    <div class="loading-spinner"></div>
-                    <p class="loading-text">${message}</p>
-                </div>`;
+            const content = document.createElement('div');
+            content.className = 'loading-content';
+            const spinner = document.createElement('div');
+            spinner.className = 'loading-spinner';
+            const text = document.createElement('p');
+            text.className = 'loading-text';
+            text.textContent = message;
+            content.append(spinner, text);
+            overlay.appendChild(content);
             document.body.appendChild(overlay);
         } else {
             overlay.querySelector('.loading-text').textContent = message;
@@ -1120,8 +1146,9 @@ const Utils = {
             if (container) container.innerHTML = '';
             return;
         }
+        if (typeof onPageChange !== 'function') throw new TypeError('Pagination callback must be a function');
         let html = '<div class="pagination">';
-        html += `<button class="btn btn-ghost btn-sm" ${currentPage <= 1 ? 'disabled' : ''} onclick="${onPageChange}(${currentPage - 1})">‹ Prev</button>`;
+        html += `<button class="btn btn-ghost btn-sm" data-page="${currentPage - 1}" ${currentPage <= 1 ? 'disabled' : ''}>‹ Prev</button>`;
         
         // Page numbers
         const maxVisible = 5;
@@ -1130,20 +1157,23 @@ const Utils = {
         if (endPage - startPage < maxVisible - 1) startPage = Math.max(1, endPage - maxVisible + 1);
         
         if (startPage > 1) {
-            html += `<button class="btn btn-ghost btn-sm" onclick="${onPageChange}(1)">1</button>`;
+            html += '<button class="btn btn-ghost btn-sm" data-page="1">1</button>';
             if (startPage > 2) html += '<span class="pagination-dots">…</span>';
         }
         for (let i = startPage; i <= endPage; i++) {
-            html += `<button class="btn ${i === currentPage ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="${onPageChange}(${i})">${i}</button>`;
+            html += `<button class="btn ${i === currentPage ? 'btn-primary' : 'btn-ghost'} btn-sm" data-page="${i}" ${i === currentPage ? 'aria-current="page"' : ''}>${i}</button>`;
         }
         if (endPage < totalPages) {
             if (endPage < totalPages - 1) html += '<span class="pagination-dots">…</span>';
-            html += `<button class="btn btn-ghost btn-sm" onclick="${onPageChange}(${totalPages})">${totalPages}</button>`;
+            html += `<button class="btn btn-ghost btn-sm" data-page="${totalPages}">${totalPages}</button>`;
         }
         
-        html += `<button class="btn btn-ghost btn-sm" ${currentPage >= totalPages ? 'disabled' : ''} onclick="${onPageChange}(${currentPage + 1})">Next ›</button>`;
+        html += `<button class="btn btn-ghost btn-sm" data-page="${currentPage + 1}" ${currentPage >= totalPages ? 'disabled' : ''}>Next ›</button>`;
         html += `<span class="pagination-info">${currentPage} of ${totalPages}</span>`;
         html += '</div>';
         container.innerHTML = html;
+        container.querySelectorAll('button[data-page]').forEach(button => {
+            button.addEventListener('click', () => onPageChange(Number(button.dataset.page)));
+        });
     }
 };

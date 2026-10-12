@@ -253,11 +253,12 @@ const App = {
         sel.innerHTML = '';
         types.forEach(t => {
             const o = document.createElement('option');
-            o.value = t.toLowerCase();
+            o.value = t;
             o.textContent = t;
             sel.appendChild(o);
         });
-        if (val) sel.value = val;
+        const matching = [...sel.options].find(o => o.value === val) || [...sel.options].find(o => o.value.toLocaleLowerCase() === String(val || '').toLocaleLowerCase());
+        if (matching) sel.value = matching.value;
     },
 
     async loadDashboard() {

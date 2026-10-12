@@ -128,7 +128,7 @@ const Bookkeeping = {
 
         // ── Purchase entries (Double-entry) ──
         purchases.forEach(p => {
-            const inventoryCost = p.amount ?? Utils.purchaseCostAmount(p);
+            const inventoryCost = Utils.purchaseCostAmount(p);
             const payable = Utils.purchasePayableAmount(p);
             const advanceRecovered = p.advanceDeducted || 0;
             const comm = p.commissionTotal || 0;

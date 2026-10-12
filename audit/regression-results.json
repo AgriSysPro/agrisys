@@ -180,6 +180,18 @@
     {
       "name": "Finance export rebuilds rows from the current filters every time",
       "status": "PASS"
+    },
+    {
+      "name": "Expense and cash movement save atomically with legacy link retained",
+      "status": "PASS"
+    },
+    {
+      "name": "Failed expense commit leaves no expense or cash transaction",
+      "status": "PASS"
+    },
+    {
+      "name": "Capital contribution and bank movement save atomically",
+      "status": "PASS"
     }
   ]
 }

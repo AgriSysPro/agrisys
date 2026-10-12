@@ -338,7 +338,7 @@ const DB = {
 
     // Capture source records for optimistic validation inside the eventual write transaction.
     async financialSnapshot() {
-        const names = ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'stock_adjustments', 'capital_accounts', 'capital_transactions', 'journal_entries', 'capital_entries', 'partner_transactions', 'company_debts', 'expenses', 'opening_balance_payments'];
+        const names = ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'stock_adjustments', 'capital_accounts', 'capital_transactions', 'journal_entries', 'capital_entries', 'partner_transactions', 'partners', 'company_debts', 'expenses', 'opening_balance_payments'];
         return Object.fromEntries(await Promise.all(names.map(async name => [name, await this.getAll(name)])));
     },
 
@@ -347,7 +347,8 @@ const DB = {
         const operationStores = new Set(operations.map(op => op.storeName));
         const dependencyGroups = [
             ['purchases', 'sales', 'stock_adjustments'],
-            ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments', 'company_debts']
+            ['purchases', 'sales', 'purchase_payments', 'sale_payments', 'farmer_advances', 'opening_balances', 'opening_balance_payments', 'company_debts'],
+            ['partners', 'partner_transactions']
         ];
         const getKey = row => row?.id ?? row?.key ?? row?.crop ?? row?.seasonId;
         const scopes = new Map();
@@ -366,16 +367,20 @@ const DB = {
             const ops = operations.filter(op => group.includes(op.storeName));
             const crops = new Set();
             const parties = new Set();
+            const partnerIds = new Set();
             for (const op of ops) {
                 const old = (expected?.[op.storeName] || []).find(row => getKey(row) === (op.key ?? getKey(op.data)));
                 for (const row of [old, op.data]) {
                     if (row?.crop) crops.add(row.crop.trim().toLowerCase());
+                    if (row?.partnerId) partnerIds.add(row.partnerId);
+                    if (op.storeName === 'partners' && row?.id) partnerIds.add(row.id);
                     for (const name of [row?.farmerName, row?.buyerName, row?.partyName, row?.personName]) if (name) parties.add(name.trim().toLowerCase());
                 }
             }
             for (const name of group) {
                 if (group.includes('stock_adjustments') && crops.size) addScope(name, row => crops.has((row.crop || '').trim().toLowerCase()));
                 if (group.includes('farmer_advances') && parties.size) addScope(name, row => [row.farmerName, row.buyerName, row.partyName, row.personName].some(value => value && parties.has(value.trim().toLowerCase())));
+                if (group.includes('partners') && partnerIds.size) addScope(name, row => name === 'partners' ? partnerIds.has(row.id) : partnerIds.has(row.partnerId));
             }
         }
         const checkedExpected = expected && Object.fromEntries(Object.entries(expected)

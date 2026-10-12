@@ -822,7 +822,10 @@ const ReceiptPDF = {
         const partyLabel = isFarmer ? 'Farmer:' : 'Buyer:';
         const partyName = isFarmer ? payment.farmerName : payment.buyerName;
         const sourceLabel = payment.sourceLabel || (isFarmer ? 'Purchase Receipt:' : 'Sale Receipt:');
-        const sourceId = payment.sourceRef || (isFarmer ? payment.purchaseId : payment.saleId);
+        const allocations = Array.isArray(payment.allocations) ? payment.allocations : [];
+        const isGeneral = (isFarmer ? payment.purchaseId : payment.saleId) === 'General';
+        const singleAllocationId = allocations.length === 1 ? allocations[0].invoiceId : '';
+        const sourceId = payment.sourceRef || (isGeneral ? (singleAllocationId || 'Multiple invoices') : (isFarmer ? payment.purchaseId : payment.saleId));
         const title = isFarmer ? 'FARMER PAYMENT VOUCHER' : 'BUYER RECEIPT VOUCHER';
         const amountLabel = isFarmer ? 'Amount Paid' : 'Amount Received';
         const beforeLabel = isFarmer ? 'Previous Payable' : 'Previous Receivable';
@@ -849,6 +852,24 @@ const ReceiptPDF = {
         y = this.drawInfoRow(doc, lx, rx, y, 'Mode:', (payment.mode || 'cash').toUpperCase(), false);
         y = this.drawInfoRow(doc, lx, rx, y, 'Reference:', payment.reference || '-', false);
         y = this.drawInfoRow(doc, lx, rx, y, 'Account:', account ? account.name : 'Not linked', false);
+        if ((payment.advanceDeducted || 0) > 0) y = this.drawInfoRow(doc, lx, rx, y, 'Advance applied:', 'PKR ' + Utils.formatPKR(payment.advanceDeducted), false);
+        if (payment.netCashAmount !== undefined && payment.netCashAmount !== null) y = this.drawInfoRow(doc, lx, rx, y, 'Cash/Bank movement:', 'PKR ' + Utils.formatPKR(payment.netCashAmount), false);
+        if (allocations.length > 1) {
+            y = this.drawInfoRow(doc, lx, rx, y, 'Invoice allocations:', `${allocations.length} invoices`, true);
+            const visibleAllocations = allocations.slice(0, 5).map(a => [String(a.invoiceId || '-'), `PKR ${Utils.formatPKR(a.amount || 0)}`]);
+            if (allocations.length > 5) {
+                const remainder = allocations.slice(5).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+                visibleAllocations.push([`${allocations.length - 5} more invoices`, `PKR ${Utils.formatPKR(remainder)}`]);
+            }
+            if (typeof doc.autoTable === 'function') {
+                doc.autoTable({ startY: y, margin: { left: lx, right: 148 - rx }, tableWidth: rx - lx,
+                    head: [['Invoice', 'Allocated']], body: visibleAllocations,
+                    styles: { font: 'helvetica', fontSize: 6, cellPadding: 1, overflow: 'linebreak' },
+                    headStyles: { fillColor: [235, 235, 235], textColor: [0, 0, 0], fontStyle: 'bold' },
+                    columnStyles: { 1: { halign: 'right' } }, theme: 'grid' });
+                y = doc.lastAutoTable.finalY + 2;
+            }
+        }
         y += 3;
 
         doc.setFillColor(245, 245, 245);
@@ -857,13 +878,14 @@ const ReceiptPDF = {
         doc.rect(lx, y, rx - lx, 29);
         y += 7;
         y = this.drawDataRow(doc, lx + 2, rx - 2, y, beforeLabel, 'PKR ' + Utils.formatPKR(payment.previousBalance || 0));
-        y = this.drawDataRow(doc, lx + 2, rx - 2, y, amountLabel, 'PKR ' + Utils.formatPKR(payment.amount || 0), true);
+        const paidAmount = payment.totalPaidCash ?? payment.amount ?? 0;
+        y = this.drawDataRow(doc, lx + 2, rx - 2, y, amountLabel, 'PKR ' + Utils.formatPKR(paidAmount), true);
         y = this.drawDataRow(doc, lx + 2, rx - 2, y, afterLabel, 'PKR ' + Utils.formatPKR(payment.newBalance || 0), true);
         y += 8;
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(16);
-        doc.text('PKR ' + Utils.formatPKR(payment.amount || 0), cx, y, { align: 'center' });
+        doc.text('PKR ' + Utils.formatPKR(paidAmount), cx, y, { align: 'center' });
         y += 8;
 
         doc.setFont('helvetica', 'normal');
