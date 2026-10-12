@@ -1,6 +1,6 @@
 # Follow-up fixes — 11 October 2026
 
-All nine findings in `CURRENT_REVIEW_2026-10-11.md` have been addressed. Further follow-up checks found and fixed three accounting inconsistencies: purchase deductions outside commission and mandi tax were posted as `Other Income` in the journal but omitted from reports; stock increases appeared in the journal but not P&L or partner profit; and opening stock entered through Stock Adjustments had no corresponding opening-equity record. These amounts now reconcile across the P&L, balance sheet, partner profit, crop analysis, and exports. Existing uncommitted work was preserved.
+All nine findings in `CURRENT_REVIEW_2026-10-11.md` have been addressed. Further follow-up checks found and fixed additional reporting inconsistencies: purchase deductions outside commission and mandi tax were posted as `Other Income` but omitted from reports; stock increases appeared in the journal but not P&L or partner profit; opening stock entered through Stock Adjustments lacked an equity record; crop analysis included synthetic stock in purchase/sale volumes; historical cash flow included account opening cash before the account existed and exports omitted beginning/ending cash; and capitalization differences split one crop across multiple profitability rows. These now reconcile across the P&L, balance sheet, partner profit, crop analysis, and exports.
 
 | Finding | Result |
 |---|---|
@@ -16,11 +16,14 @@ All nine findings in `CURRENT_REVIEW_2026-10-11.md` have been addressed. Further
 | Purchase deduction income omitted | A shared calculation applies the journal's existing treatment of non-commission, non-tax PKR deductions as other income across the P&L, retained earnings, partner profit, crop analysis, and exports. |
 | Stock increase gains omitted | Stock surplus gains are now recognized in the P&L, retained earnings, partner profit, crop analysis, and PDF/Excel exports. |
 | Opening stock adjustment omitted from equity | Saving opening stock through Stock Adjustments now creates its linked opening-balance equity record; legacy unlinked records remain accounted once. |
+| Synthetic stock counted as crop purchases/sales | Crop and stock dashboards separate real purchase/sale volumes from opening stock, surplus, and shortage movements while keeping inventory quantity inclusive of all movements. |
+| Historical cash flow includes future account balances | Beginning cash uses accounts and transactions that existed before the period; in-period account opening balances appear as financing flows, and screen/PDF/Excel include beginning and ending cash. |
+| Crop capitalization splits profitability rows | P&L groups crop data case-insensitively while preserving a readable crop label. |
 
 ## Verification
 
 - `node audit/regression-tests.cjs`: 30 passing scenarios; 25 application modules and five vendor scripts parse; HTML reference checks pass.
-- `node audit/followup-review.cjs`: 19 passing correctness scenarios. PASS means the correct result was verified.
+- `node audit/followup-review.cjs`: 22 passing correctness scenarios. PASS means the correct result was verified.
 - `node audit/browser-smoke.cjs`: tested with real IndexedDB in a disposable headless Edge profile, including two tabs deliberately paused after reading the same invoice, conflict rejection, manual journal cash posting, and matching screen/Excel financial totals. Also exercises startup, payment reversal, cache rebuilds, backup replacement/rollback, receipt numbering, and PDF/Excel generation.
 - `git diff --check`: no whitespace errors.
 

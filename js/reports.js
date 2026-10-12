@@ -88,6 +88,24 @@ const Reports = {
         return this.manualCash({ journals: entries }, from, to);
     },
 
+    cashAccountOpeningFlows(scoped, from, to) {
+        return (scoped.accounts || []).filter(a => {
+            const date = a.createdAt ? String(a.createdAt).slice(0, 10) : '';
+            return date && date >= from && date <= to;
+        }).reduce((s, a) => s + (a.openingBalance || 0), 0);
+    },
+
+    cashBalances(scoped, from, to, netCashFlow) {
+        const accountDate = account => account.createdAt ? String(account.createdAt).slice(0, 10) : '';
+        const accounts = scoped.accounts || [];
+        const openingCash = accounts.filter(a => !accountDate(a) || accountDate(a) < from).reduce((s, a) => s + (a.openingBalance || 0), 0);
+        const priorTransactions = (scoped.capitalTxs || []).filter(t => t.date < from);
+        const priorCashTransactions = priorTransactions.reduce((s, t) => s + (t.type === 'deposit' ? t.amount || 0 : t.type === 'withdrawal' ? -(t.amount || 0) : 0), 0);
+        const priorManualCash = this.manualCash({ journals: (scoped.journals || []).filter(j => !j.cashPosted && j.date < from) });
+        const beginningCashBalance = openingCash + priorCashTransactions + priorManualCash;
+        return { beginningCashBalance, endingCashBalance: beginningCashBalance + netCashFlow };
+    },
+
     async getScopedData(fromDate = '', toDate = '') {
         // Financial balances use complete real history. Carry-forward copies are never added to it.
         const fetch = store => DB.getAll(store);
@@ -190,11 +208,14 @@ const Reports = {
         if (manualExpenses) expByType['Manual journal adjustments'] = manualExpenses;
 
         // Crop-wise breakdown
-        const crops = [...new Set([...purchases.map(p => p.crop), ...sales.map(s => s.crop)].filter(Boolean))];
+        const cropNames = [...purchases.map(p => p.crop), ...sales.map(s => s.crop)].filter(Boolean);
+        const crops = cropNames.filter((crop, index) => cropNames.findIndex(candidate => String(candidate).trim().toLowerCase() === String(crop).trim().toLowerCase()) === index)
+            .map(crop => String(crop).trim());
         const cropData = crops.map(crop => {
-            const cPurchases = purchases.filter(p => p.crop === crop);
-            const cSales = sales.filter(s => s.crop === crop);
-            const cExpenses = operatingExpenses.filter(e => e.crop === crop);
+            const cropKey = crop.toLowerCase();
+            const cPurchases = purchases.filter(p => String(p.crop || '').trim().toLowerCase() === cropKey);
+            const cSales = sales.filter(s => String(s.crop || '').trim().toLowerCase() === cropKey);
+            const cExpenses = operatingExpenses.filter(e => String(e.crop || '').trim().toLowerCase() === cropKey);
             const adjustmentGain = this.stockAdjustmentGain(scoped, from, to, crop);
             const revenue = cSales.reduce((s, x) => s + (x.amount || 0), 0) + adjustmentGain;
             const comm = cPurchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
@@ -448,19 +469,13 @@ const Reports = {
         const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
         const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
         
-        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing;
+        const accountOpeningFlows = this.cashAccountOpeningFlows(scoped, fromDate, toDate);
+        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing + accountOpeningFlows;
 
         const netCashFlow = netOperatingCash + netFinancingCash + journalInvesting;
 
         // Beginning and Ending Cash Balances
-        const allCapTxUntilFrom = (scoped.capitalTxs || []).filter(t => t.date < fromDate);
-        let beginningCashBalance = (scoped.accounts || []).reduce((s, a) => s + (a.openingBalance || 0), 0);
-        allCapTxUntilFrom.forEach(t => {
-            if (t.type === 'deposit') beginningCashBalance += t.amount;
-            else if (t.type === 'withdrawal') beginningCashBalance -= t.amount;
-        });
-        beginningCashBalance += this.manualCash({ journals: scoped.journals.filter(j => !j.cashPosted && j.date < fromDate) });
-        const endingCashBalance = beginningCashBalance + netCashFlow;
+        const { beginningCashBalance, endingCashBalance } = this.cashBalances(scoped, fromDate, toDate, netCashFlow);
 
         const container = document.getElementById('report-content');
         container.innerHTML = `
@@ -484,6 +499,7 @@ const Reports = {
                     <div class="summary-row"><span class="summary-label">Manual journal investing cash</span><span class="summary-value">PKR ${Utils.formatPKR(journalInvesting)}</span></div>
                     <div class="summary-row total"><span class="summary-label"><strong>CASH FLOWS FROM FINANCING ACTIVITIES</strong></span></div>
                     <div class="summary-row"><span class="summary-label">Manual journal financing cash</span><span class="summary-value">PKR ${Utils.formatPKR(journalFinancing)}</span></div>
+                    ${accountOpeningFlows ? `<div class="summary-row"><span class="summary-label" style="padding-left:24px">Opening balances of accounts created during period</span><span class="summary-value">PKR ${Utils.formatPKR(accountOpeningFlows)}</span></div>` : ''}
                     
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Capital Invested / Deposits</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(capitalDeposits)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Capital Withdrawn</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(capitalWithdrawals)} )</span></div>
@@ -598,7 +614,7 @@ const Reports = {
             if (adjustmentGain) row('Stock Adjustment Gain', adjustmentGain);
             row('Less: Returns & Discounts', 0);
             subtotalLine(1);
-            row('Net Sales Revenue', rev, { col2: true, bold: true });
+            row('Total Revenue', rev, { col2: true, bold: true });
             y += 2;
 
             // ═══ COST OF GOODS SOLD ═══
@@ -1136,8 +1152,10 @@ const Reports = {
             const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
             const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
 
-            const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing;
+            const accountOpeningFlows = this.cashAccountOpeningFlows(scoped, fromDate, toDate);
+            const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing + accountOpeningFlows;
             const netCashFlow = netOperatingCash + netFinancingCash + journalInvesting;
+            const { beginningCashBalance, endingCashBalance } = this.cashBalances(scoped, fromDate, toDate, netCashFlow);
 
             const biz = await Settings.getBusiness();
             const { jsPDF } = window.jspdf;
@@ -1192,6 +1210,7 @@ const Reports = {
 
             y += 6;
             drawSectionHeader('FINANCING ACTIVITIES');
+            drawRow('Opening balances of accounts created during period', accountOpeningFlows);
             drawRow('Manual journal financing cash', journalFinancing, journalFinancing < 0);
             drawRow('Manual journal investing cash', journalInvesting, journalInvesting < 0);
             drawRow('Owner Capital Injections', capitalDeposits);
@@ -1205,7 +1224,9 @@ const Reports = {
 
             y += 6;
             drawSectionHeader('NET CASH SUMMARY');
+            drawRow('Beginning Cash & Bank Balance', beginningCashBalance);
             drawRow('NET INCREASE / (DECREASE) IN CASH', netCashFlow, netCashFlow < 0, true);
+            drawRow('ENDING CASH & BANK BALANCE', endingCashBalance, false, true);
 
             doc.setFontSize(8);
             doc.setTextColor(148, 163, 184);
@@ -1376,8 +1397,10 @@ const Reports = {
         const partnerDrawings = partnerTxsRange.filter(e => e.type === 'drawing').reduce((s, e) => s + (e.amount || 0), 0);
         const partnerPayouts = partnerTxsRange.filter(e => e.type === 'profit_payout').reduce((s, e) => s + (e.amount || 0), 0);
 
-        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing;
+        const accountOpeningFlows = this.cashAccountOpeningFlows(scoped, fromDate, toDate);
+        const netFinancingCash = capitalDeposits - capitalWithdrawals + partnerContributions - partnerDrawings - partnerPayouts - debtOutflows + debtInflows + journalFinancing + accountOpeningFlows;
         const netCashFlow = netOperatingCash + netFinancingCash + journalInvesting;
+        const { beginningCashBalance, endingCashBalance } = this.cashBalances(scoped, fromDate, toDate, netCashFlow);
 
         const rows = [
             { Category: 'OPERATING', Item: 'Cash Received from Buyers', Amount: cashFromSales },
@@ -1390,6 +1413,7 @@ const Reports = {
             { Category: 'OPERATING', Item: 'NET OPERATING CASH FLOW', Amount: netOperatingCash },
             { Category: 'INVESTING', Item: 'Manual journal investing cash', Amount: journalInvesting },
             { Category: 'FINANCING', Item: 'Manual journal financing cash', Amount: journalFinancing },
+            { Category: 'FINANCING', Item: 'Opening balances of accounts created during period', Amount: accountOpeningFlows },
             { Category: 'FINANCING', Item: 'Owner Capital Injections', Amount: capitalDeposits },
             { Category: 'FINANCING', Item: 'Owner Capital Withdrawals', Amount: -capitalWithdrawals },
             { Category: 'FINANCING', Item: 'Partners Capital Contributions', Amount: partnerContributions },
@@ -1397,7 +1421,9 @@ const Reports = {
             { Category: 'FINANCING', Item: 'Loans Issued (Outflow)', Amount: -debtOutflows },
             { Category: 'FINANCING', Item: 'Loan Repayments Received (Inflow)', Amount: debtInflows },
             { Category: 'FINANCING', Item: 'NET FINANCING CASH FLOW', Amount: netFinancingCash },
-            { Category: 'SUMMARY', Item: 'NET CASH FLOW FOR PERIOD', Amount: netCashFlow }
+            { Category: 'SUMMARY', Item: 'Beginning Cash & Bank Balance', Amount: beginningCashBalance },
+            { Category: 'SUMMARY', Item: 'NET CASH FLOW FOR PERIOD', Amount: netCashFlow },
+            { Category: 'SUMMARY', Item: 'ENDING CASH & BANK BALANCE', Amount: endingCashBalance }
         ];
 
         const ws = XLSX.utils.json_to_sheet(rows);

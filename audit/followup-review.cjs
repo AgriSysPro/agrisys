@@ -50,6 +50,46 @@ const reportDates = () => form({'rp-from':'2026-01-01','rp-to':'2026-12-31'});
         records.opening_balances=[{id:'OPEN',type:'stock',crop:'Wheat',weight:100,amount:80,date:'2026-01-01'}];
         await api.Reports.generateBalanceSheet(); assert.equal(metric('Opening Equity'),80);
     });
+    await check('Crop analysis excludes synthetic stock from purchase and sale weight metrics', async () => {
+        const stock=api.Utils.applyStockAdjustments(
+            [purchase('P1',{amountPaid:30})],
+            [sale('S1',{netWeight:60,amount:120,amountReceived:40})],
+            [
+                {id:'OB',direction:'opening',crop:'Wheat',weight:100,value:100,date:'2026-01-01'},
+                {id:'IN',direction:'increase',crop:'Wheat',weight:50,value:50,date:'2026-01-02'},
+                {id:'OUT',direction:'decrease',crop:'Wheat',weight:20,value:20,date:'2026-01-03'}
+            ]
+        );
+        const m=api.CropAnalysis.computeMetrics('Wheat',stock.purchases,stock.sales,[]);
+        assert.equal(m.purchaseWeight,100); assert.equal(m.purchaseMaund,2.5);
+        assert.equal(m.saleWeight,60); assert.equal(m.saleMaund,1.5);
+        assert.equal(m.netWeight,170);
+        records.purchases=[purchase('P1',{amountPaid:30})]; records.sales=[sale('S1',{netWeight:60})];
+        records.stock_adjustments=[
+            {id:'OB',direction:'opening',crop:'Wheat',weight:100,value:100,date:'2026-01-01'},
+            {id:'IN',direction:'increase',crop:'Wheat',weight:50,value:50,date:'2026-01-02'},
+            {id:'OUT',direction:'decrease',crop:'Wheat',weight:20,value:20,date:'2026-01-03'}
+        ];
+        await api.StockAdjustments.render();
+        const inventoryText=element('stock-adj-live-summary').innerHTML;
+        assert.match(inventoryText,/Purchased: 100 KG/); assert.match(inventoryText,/Sold: 60 KG/);
+        assert.match(inventoryText,/Opening: 100 KG/); assert.match(inventoryText,/170\.00 KG/);
+    });
+    await check('Historical cash flow starts account balances on their creation date', async () => {
+        records.capital_accounts=[{id:'cash',name:'Cash',openingBalance:100,createdAt:'2026-02-01T09:00:00.000Z'}];
+        form({'rp-from':'2026-01-01','rp-to':'2026-02-28'});
+        await api.Reports.generateCashFlow();
+        assert.equal(metric('Beginning Cash & Bank Balance'),0);
+        assert.equal(metric('ENDING CASH & BANK BALANCE'),100);
+    });
+    await check('P&L groups crop names regardless of capitalization', async () => {
+        records.purchases=[purchase('P1',{crop:'Wheat'})];
+        records.sales=[sale('S1',{crop:'wheat',amount:200})];
+        reportDates(); await api.Reports.generatePnL();
+        const html=element('report-content').innerHTML;
+        assert.equal(html.split('>Wheat</td>').length - 1,1);
+        assert.equal(metric('Net Profit'),100);
+    });
     await check('Mandi tax liability missing from balance sheet', async () => {
         records.purchases = [purchase('P1',{netPayableAmount:90,mandiTaxTotal:10,pkrDeductionsBeforeAdvance:10})];
         reportDates(); await api.Reports.generateBalanceSheet();

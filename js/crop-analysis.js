@@ -73,7 +73,7 @@ const CropAnalysis = {
 
         // Purchase metrics
         const purchaseCount = actualPurchases.length;
-        const purchaseWeight = Utils.sumBy(fp, 'netWeight');
+        const purchaseWeight = Utils.sumBy(actualPurchases, 'netWeight');
         const purchaseMaund = purchaseWeight / 40;
         const purchaseAmount = Utils.sumBy(actualPurchases, p => Utils.purchaseCostAmount(p));
         const purchaseAvgRate = purchaseMaund > 0 ? purchaseAmount / purchaseMaund : 0;
@@ -83,7 +83,7 @@ const CropAnalysis = {
 
         // Sale metrics
         const saleCount = actualSales.length;
-        const saleWeight = Utils.sumBy(fs, 'netWeight');
+        const saleWeight = Utils.sumBy(actualSales, 'netWeight');
         const saleMaund = saleWeight / 40;
         const saleAmount = Utils.sumBy(actualSales, 'amount');
         const saleAvgRate = saleMaund > 0 ? saleAmount / saleMaund : 0;
@@ -91,7 +91,9 @@ const CropAnalysis = {
         const saleBalance = saleAmount - saleReceived;
 
         // Net inventory
-        const netWeight = purchaseWeight - saleWeight;
+        const stockInWeight = Utils.sumBy(fp, 'netWeight');
+        const stockOutWeight = Utils.sumBy(fs, 'netWeight');
+        const netWeight = stockInWeight - stockOutWeight;
         const netMaund = netWeight / 40;
 
         // Expenses

@@ -428,14 +428,17 @@ const StockAdjustments = {
                     const cSales = adjSales.filter(s => s.crop && s.crop.trim().toLowerCase() === cropLower);
                     const cAdjs = adjustments.filter(a => a.crop && a.crop.trim().toLowerCase() === cropLower);
 
-                    const pWeight = cPurchases.reduce((s, p) => s + (p.netWeight || 0), 0);
-                    const sWeight = cSales.reduce((s, s1) => s + (s1.netWeight || 0), 0);
-                    const netStock = pWeight - sWeight;
+                    const stockInWeight = cPurchases.reduce((s, p) => s + (p.netWeight || 0), 0);
+                    const stockOutWeight = cSales.reduce((s, s1) => s + (s1.netWeight || 0), 0);
+                    const netStock = stockInWeight - stockOutWeight;
+                    const purchasedWeight = cPurchases.filter(p => p.type !== 'stock_adjustment' && p.type !== 'opening_stock').reduce((s, p) => s + (p.netWeight || 0), 0);
+                    const soldWeight = cSales.filter(s => s.type !== 'stock_adjustment').reduce((s, sale) => s + (sale.netWeight || 0), 0);
                     const netBags = netStock / 100;
                     const netMaunds = netStock / 40;
 
                     const totalDec = cAdjs.filter(a => a.direction === 'decrease').reduce((s, a) => s + (a.weight || 0), 0);
                     const totalInc = cAdjs.filter(a => a.direction === 'increase').reduce((s, a) => s + (a.weight || 0), 0);
+                    const openingWeight = cAdjs.filter(a => a.direction === 'opening').reduce((s, a) => s + (a.weight || 0), 0);
 
                     return `
                         <div class="stat-card ${netStock > 0 ? 'green' : 'orange'}">
@@ -447,8 +450,9 @@ const StockAdjustments = {
                                 ${Utils.formatNum(netMaunds, 2)} Maunds <span style="font-size:0.85rem;color:var(--text-muted);font-weight:normal;">(~${Utils.formatNum(netBags, 1)} Bags)</span>
                             </div>
                             <div class="stat-sub" style="display:flex;gap:12px;font-size:0.75rem;border-top:1px solid var(--border-color);padding-top:6px;margin-top:6px;">
-                                <span>Purchased: ${Utils.formatNum(pWeight, 0)} KG</span>
-                                <span>Sold: ${Utils.formatNum(sWeight, 0)} KG</span>
+                                <span>Purchased: ${Utils.formatNum(purchasedWeight, 0)} KG</span>
+                                <span>Sold: ${Utils.formatNum(soldWeight, 0)} KG</span>
+                                ${openingWeight > 0 ? `<span>Opening: ${Utils.formatNum(openingWeight, 0)} KG</span>` : ''}
                                 ${totalDec > 0 ? `<span style="color:var(--accent-danger)">Loss/Shortage: -${Utils.formatNum(totalDec, 0)} KG</span>` : ''}
                                 ${totalInc > 0 ? `<span style="color:var(--accent-success)">Surplus: +${Utils.formatNum(totalInc, 0)} KG</span>` : ''}
                             </div>
