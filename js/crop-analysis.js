@@ -119,13 +119,14 @@ const CropAnalysis = {
         });
 
         // Commission Revenue earned on purchases
-        const totalCommission = Utils.sumBy(fp, 'commissionTotal');
+        const totalCommission = fp.reduce((sum, p) => sum + Utils.purchaseAncillaryIncome(p), 0);
+        const stockAdjustmentGain = fp.filter(p => p.type === 'stock_adjustment').reduce((sum, p) => sum + (p.amount || 0), 0);
 
         // Expenses linked to purchases are already in COGS. We only subtract unlinked expenses.
         const unlinkedExpenses = Utils.sumBy(fe.filter(e => !e.purchaseId), 'amount');
 
         // Net P&L (Sale Revenue + Commission Revenue - COGS - Unlinked Expenses)
-        const netPL = saleAmount + totalCommission - totalCogs - unlinkedExpenses;
+        const netPL = saleAmount + totalCommission + stockAdjustmentGain - totalCogs - unlinkedExpenses;
 
         // Remaining amount (purchase balance - sale balance)
         const remainingAmount = purchaseBalance - saleBalance;

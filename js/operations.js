@@ -562,6 +562,10 @@ const StockAdjustments = {
 
         const ops = [];
         ops.push({ storeName: 'stock_adjustments', action: 'put', data });
+        if (data.direction === 'opening') ops.push({ storeName: 'opening_balances', action: 'put', data: {
+            id: data.id, type: 'stock', date: data.date, crop: data.crop, weight: data.weight, amount: data.value,
+            notes: data.notes || data.reason || 'Opening stock', createdAt: data.createdAt
+        } });
         ops.push({
             storeName: 'audit_logs', action: 'put', data: {
                 id: Utils.generateId(), date: Utils.todayISO(), action: 'create',

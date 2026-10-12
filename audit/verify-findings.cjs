@@ -79,5 +79,8 @@ const money = html => {
     const pnlHtml = element('report-content').innerHTML;
     const net = pnlHtml.match(/Net Profit \/ \(Loss\)[^]*?PKR ([0-9,]+\.[0-9]{2})/);
     console.log('\nP&L net profit reported =', net ? net[1] : '(not found)');
-    console.log('  (journal implies net profit of +10 from Other Income; report omits it)');
+    console.log('  (should match the journal Other Income credit)');
+    if (Math.abs(bs.totalAssets - bs.totalLiabEquity) >= 0.01 || otherIncome !== 10 || !net || Math.abs(Number(net[1].replace(/,/g, '')) - 10) >= 0.01) {
+        throw new Error('Purchase deduction does not reconcile across the balance sheet, journal, and P&L');
+    }
 })().catch(e => { console.error('ERROR', e); process.exit(1); });

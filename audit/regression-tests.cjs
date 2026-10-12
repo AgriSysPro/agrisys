@@ -15,7 +15,7 @@ const context = vm.createContext({ console: { log() {}, warn() {}, error() {} },
     document: { getElementById: element, addEventListener() {}, querySelector: () => element('selector'), querySelectorAll: () => [] } });
 const files = fs.readdirSync(path.join(root, 'js')).filter(f => f.endsWith('.js'));
 for (const file of files) vm.runInContext(fs.readFileSync(path.join(root, 'js', file), 'utf8'), context, { filename: file });
-const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, Settings, PaymentService, InventoryLots, PurchaseList, SaleList})', context);
+const api = vm.runInContext('({DB, Utils, Reports, Selling, Purchasing, PurchasePayments, SalePayments, BankAccounts, CoreServices, SeasonManager, Farmers, Buyers, Bookkeeping, PartnersMgmt, CropAnalysis, Settings, PaymentService, InventoryLots, PurchaseList, SaleList})', context);
 const originalImport = api.DB.importAll;
 const originalBuyerRender = api.Buyers.render;
 let records = {}, seq = 0;

@@ -21,7 +21,7 @@ const PartnersMgmt = {
         const actualSales = adjusted.sales.filter(s => s.type !== 'stock_adjustment');
         const virtualSales = adjusted.sales.filter(s => s.type === 'stock_adjustment');
         const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
-        const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+        const commRev = purchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
         const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases, scoped.sales, scoped.expenses.filter(e => !activeSeason || e.date <= activeSeason.endDate));
 
         let cogs = 0;
@@ -37,7 +37,8 @@ const PartnersMgmt = {
             }, 0);
         }
         const opExp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-        return (salesRev + commRev) - cogs - invLoss - opExp + Reports.manualProfit(scoped, activeSeason?.startDate || '', activeSeason?.endDate || '');
+        const adjustmentGain = Reports.stockAdjustmentGain(scoped, activeSeason?.startDate || '', activeSeason?.endDate || '');
+        return (salesRev + commRev + adjustmentGain) - cogs - invLoss - opExp + Reports.manualProfit(scoped, activeSeason?.startDate || '', activeSeason?.endDate || '');
     },
 
     // ── Partners Summary Helper ──

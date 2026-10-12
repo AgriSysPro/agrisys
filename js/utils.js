@@ -497,6 +497,15 @@ const Utils = {
         return (purchase.netPayableAmount ?? purchase.amount ?? 0);
     },
 
+    otherPurchaseDeductionIncome(purchase) {
+        const deductions = purchase.pkrDeductionsBeforeAdvance ?? Math.max(0, (purchase.totalPkrDeductions || 0) - (purchase.advanceDeducted || 0));
+        return Math.max(0, deductions - (purchase.commissionTotal || 0) - (purchase.mandiTaxTotal || 0));
+    },
+
+    purchaseAncillaryIncome(purchase) {
+        return (purchase.commissionTotal || 0) + this.otherPurchaseDeductionIncome(purchase);
+    },
+
     async getInvoicePayments(store, linkField, invoiceId) {
         return (await DB.getAll(store)).filter(p => this.paymentAllocatedTo(p, invoiceId, linkField) > 0)
             .map(p => ({ ...p, amount: this.paymentAllocatedTo(p, invoiceId, linkField) }));

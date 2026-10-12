@@ -1,6 +1,6 @@
 # Follow-up fixes — 11 October 2026
 
-All nine findings in `CURRENT_REVIEW_2026-10-11.md` have been addressed in the local working tree. Existing uncommitted work was preserved. No commits or deployment were performed.
+All nine findings in `CURRENT_REVIEW_2026-10-11.md` have been addressed. Further follow-up checks found and fixed three accounting inconsistencies: purchase deductions outside commission and mandi tax were posted as `Other Income` in the journal but omitted from reports; stock increases appeared in the journal but not P&L or partner profit; and opening stock entered through Stock Adjustments had no corresponding opening-equity record. These amounts now reconcile across the P&L, balance sheet, partner profit, crop analysis, and exports. Existing uncommitted work was preserved.
 
 | Finding | Result |
 |---|---|
@@ -13,11 +13,14 @@ All nine findings in `CURRENT_REVIEW_2026-10-11.md` have been addressed in the l
 | Purchase deletion strands sales | Purchases, sales, opening balances, and stock corrections validate dated inventory availability before committing. Changes that worsen a stock deficit are rejected; legitimate unused purchases remain deletable. |
 | Backdated settlements use future deposits | Advance availability uses the proposed date and full history. Saves, reversals, and opening-balance changes check subsequent dated balances too, preserving advances already reserved by later applications. |
 | Concurrent payment updates lost | Source snapshots are compared inside the same IndexedDB write transaction as the update. Conflicting payments retry with fresh allocations; stale document changes fail without partial writes. |
+| Purchase deduction income omitted | A shared calculation applies the journal's existing treatment of non-commission, non-tax PKR deductions as other income across the P&L, retained earnings, partner profit, crop analysis, and exports. |
+| Stock increase gains omitted | Stock surplus gains are now recognized in the P&L, retained earnings, partner profit, crop analysis, and PDF/Excel exports. |
+| Opening stock adjustment omitted from equity | Saving opening stock through Stock Adjustments now creates its linked opening-balance equity record; legacy unlinked records remain accounted once. |
 
 ## Verification
 
 - `node audit/regression-tests.cjs`: 30 passing scenarios; 25 application modules and five vendor scripts parse; HTML reference checks pass.
-- `node audit/followup-review.cjs`: 16 passing correctness scenarios. PASS now means the correct result was verified, rather than that an old defect was reproduced.
+- `node audit/followup-review.cjs`: 19 passing correctness scenarios. PASS means the correct result was verified.
 - `node audit/browser-smoke.cjs`: tested with real IndexedDB in a disposable headless Edge profile, including two tabs deliberately paused after reading the same invoice, conflict rejection, manual journal cash posting, and matching screen/Excel financial totals. Also exercises startup, payment reversal, cache rebuilds, backup replacement/rollback, receipt numbering, and PDF/Excel generation.
 - `git diff --check`: no whitespace errors.
 

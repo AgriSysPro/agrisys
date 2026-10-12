@@ -54,9 +54,17 @@ const Reports = {
 
     openingEquity(scoped, to) {
         const cash = scoped.accounts.filter(a => !a.createdAt || String(a.createdAt).slice(0, 10) <= to).reduce((s, a) => s + (a.openingBalance || 0), 0);
-        return cash + scoped.openingBalances.filter(o => o.date <= to).reduce((s, o) =>
+        const openingBalances = scoped.openingBalances.filter(o => o.date <= to);
+        const unlinkedOpeningStock = scoped.stockAdjustments.filter(a => a.direction === 'opening' && a.date <= to && !openingBalances.some(o => o.type === 'stock' && o.id === a.id)).reduce((s, a) => s + (a.value || 0), 0);
+        return cash + unlinkedOpeningStock + openingBalances.reduce((s, o) =>
             s + (['stock', 'farmer_advance', 'buyer_receivable'].includes(o.type) ? o.amount : ['farmer_payable', 'buyer_advance'].includes(o.type) ? -o.amount : 0), 0)
             - this.manualBalance(scoped, 'Opening Equity', '', to);
+    },
+
+    stockAdjustmentGain(scoped, from = '', to = '', crop = '') {
+        const cropKey = String(crop || '').trim().toLowerCase();
+        return (scoped.stockAdjustments || []).filter(a => a.direction === 'increase' && (!from || a.date >= from) && (!to || a.date <= to) && (!cropKey || String(a.crop || '').trim().toLowerCase() === cropKey))
+            .reduce((sum, a) => sum + (a.value || 0), 0);
     },
 
     manualProfit(scoped, from = '', to = '') {
@@ -144,15 +152,16 @@ const Reports = {
         const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
 
         const salesRevenue = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
-        const commissionRevenue = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
-        const totalRevenue = salesRevenue + commissionRevenue;
+        const commissionRevenue = purchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
+        const adjustmentGain = this.stockAdjustmentGain(scoped, from, to);
+        const totalRevenue = salesRevenue + commissionRevenue + adjustmentGain;
 
         const salesUntilTo = (scoped.sales || []).filter(s => s.date <= to);
         const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => e.date <= to));
         const totalCOGS = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
         const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
         
-        const grossProfit = salesRevenue - totalCOGS + commissionRevenue;
+        const grossProfit = salesRevenue - totalCOGS + commissionRevenue + adjustmentGain;
         const totalExpenses = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
         const netProfit = grossProfit - inventoryLoss - totalExpenses;
         const grossMargin = totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(1) : '0.0';
@@ -186,8 +195,9 @@ const Reports = {
             const cPurchases = purchases.filter(p => p.crop === crop);
             const cSales = sales.filter(s => s.crop === crop);
             const cExpenses = operatingExpenses.filter(e => e.crop === crop);
-            const revenue = cSales.reduce((s, x) => s + (x.amount || 0), 0);
-            const comm = cPurchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
+            const adjustmentGain = this.stockAdjustmentGain(scoped, from, to, crop);
+            const revenue = cSales.reduce((s, x) => s + (x.amount || 0), 0) + adjustmentGain;
+            const comm = cPurchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
             const cost = this.cogsForSales(cSales, inventoryMetrics);
             const exp = cExpenses.reduce((s, e) => s + (e.amount || 0), 0);
             const boughtWeight = cPurchases.reduce((s, p) => s + (p.netWeight || 0), 0);
@@ -213,6 +223,7 @@ const Reports = {
                 <div class="summary-box">
                     <div class="summary-row"><span class="summary-label">Sales Revenue</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(salesRevenue)}</span></div>
                     ${commissionRevenue > 0 ? `<div class="summary-row"><span class="summary-label">Commission / Other Income</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(commissionRevenue)}</span></div>` : ''}
+                    ${adjustmentGain > 0 ? `<div class="summary-row"><span class="summary-label">Stock Adjustment Gain</span><span class="summary-value" style="color:var(--accent-success)">PKR ${Utils.formatPKR(adjustmentGain)}</span></div>` : ''}
                     <div class="summary-row" style="border-top:1px solid var(--border-color)"><span class="summary-label"><strong>Total Gross Revenue</strong></span><span class="summary-value" style="color:var(--accent-success)"><strong>PKR ${Utils.formatPKR(totalRevenue)}</strong></span></div>
                     <div class="summary-row"><span class="summary-label">Less: Cost of Goods Sold</span><span class="summary-value" style="color:var(--accent-danger)">( PKR ${Utils.formatPKR(totalCOGS)} )</span></div>
                     <div class="summary-row total"><span class="summary-label">Gross Profit</span><span class="summary-value" style="color:${grossProfit >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)'}">PKR ${Utils.formatPKR(grossProfit)}</span></div>
@@ -332,8 +343,8 @@ const Reports = {
         const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
         const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
         const salesRevUntilTo = actualSalesUntilTo.reduce((s, x) => s + (x.amount || 0), 0);
-        const commRevUntilTo = allPurchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
-        const totalRevUntilTo = salesRevUntilTo + commRevUntilTo;
+        const commRevUntilTo = allPurchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
+        const totalRevUntilTo = salesRevUntilTo + commRevUntilTo + this.stockAdjustmentGain(scoped, '', toDate);
         const cogsUntilTo = this.cogsForSales(actualSalesUntilTo, inventoryMetrics);
         const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
         const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
@@ -520,15 +531,16 @@ const Reports = {
             const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
 
             const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
-            const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
-            const rev = salesRev + commRev;
+            const commRev = purchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
+            const adjustmentGain = this.stockAdjustmentGain(scoped, from, to);
+            const rev = salesRev + commRev + adjustmentGain;
             const salesUntilTo = (scoped.sales || []).filter(s => s.date <= to);
             const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => e.date <= to));
             const cogs = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
             const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
             const closingInventory = Object.values(inventoryMetrics).reduce((s, c) => s + (c.inventoryValue || 0), 0);
             const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
-            const gross = salesRev - cogs + commRev;
+            const gross = salesRev - cogs + commRev + adjustmentGain;
             const net = gross - inventoryLoss - exp;
 
             const expByType = {};
@@ -581,7 +593,9 @@ const Reports = {
 
             // ═══ REVENUE ═══
             sectionHead('REVENUE');
-            row('Gross Sales Revenue', rev);
+            row('Gross Sales Revenue', salesRev);
+            if (commRev) row('Commission / Other Income', commRev);
+            if (adjustmentGain) row('Stock Adjustment Gain', adjustmentGain);
             row('Less: Returns & Discounts', 0);
             subtotalLine(1);
             row('Net Sales Revenue', rev, { col2: true, bold: true });
@@ -730,14 +744,15 @@ const Reports = {
             const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
 
             const salesRev    = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
-            const commRev     = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
-            const rev         = salesRev + commRev;
+            const commRev     = purchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
+            const adjustmentGain = this.stockAdjustmentGain(scoped, from, to);
+            const rev         = salesRev + commRev + adjustmentGain;
             const salesUntilTo = scoped.sales.filter(s => s.date <= to);
             const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases.filter(p => p.date <= to), salesUntilTo, scoped.expenses.filter(e => e.date <= to));
             const cogs        = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
             const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
             const exp         = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
-            const grossProfit = salesRev - cogs + commRev;
+            const grossProfit = salesRev - cogs + commRev + adjustmentGain;
             const netProfit   = grossProfit - inventoryLoss - exp;
 
             // Outstanding True Balances As Of 'to' date
@@ -790,7 +805,9 @@ const Reports = {
             y += 5;
 
             const plData = [
-                ['Sales Revenue', '', 'PKR ' + Utils.formatPKR(rev)],
+                ['Sales Revenue', '', 'PKR ' + Utils.formatPKR(salesRev)],
+                ['Commission / Other Income', '', 'PKR ' + Utils.formatPKR(commRev)],
+                ['Stock Adjustment Gain', '', 'PKR ' + Utils.formatPKR(adjustmentGain)],
                 ['Less: Cost of Goods Sold', '', '(PKR ' + Utils.formatPKR(cogs) + ')'],
                 ['Gross Profit', (rev > 0 ? ((grossProfit/rev)*100).toFixed(1) : '0') + '%', 'PKR ' + Utils.formatPKR(grossProfit)]
             ];
@@ -974,8 +991,8 @@ const Reports = {
             const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
             const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
             const salesRevUntilTo = actualSalesUntilTo.reduce((s, x) => s + (x.amount || 0), 0);
-            const commRevUntilTo = allPurchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
-            const totalRevUntilTo = salesRevUntilTo + commRevUntilTo;
+            const commRevUntilTo = allPurchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
+            const totalRevUntilTo = salesRevUntilTo + commRevUntilTo + this.stockAdjustmentGain(scoped, '', toDate);
             const cogsUntilTo = this.cogsForSales(actualSalesUntilTo, inventoryMetrics);
             const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
             const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
@@ -1272,8 +1289,8 @@ const Reports = {
         const actualSalesUntilTo = allSales.filter(s => s.type !== 'stock_adjustment');
         const virtualSalesUntilTo = allSales.filter(s => s.type === 'stock_adjustment');
         const salesRevUntilTo = actualSalesUntilTo.reduce((s, x) => s + (x.amount || 0), 0);
-        const commRevUntilTo = allPurchases.reduce((s, p) => s + (p.commissionTotal || 0), 0);
-        const totalRevUntilTo = salesRevUntilTo + commRevUntilTo;
+        const commRevUntilTo = allPurchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
+        const totalRevUntilTo = salesRevUntilTo + commRevUntilTo + this.stockAdjustmentGain(scoped, '', toDate);
         const cogsUntilTo = this.cogsForSales(actualSalesUntilTo, inventoryMetrics);
         const invLossUntilTo = this.cogsForSales(virtualSalesUntilTo, inventoryMetrics);
         const opExpUntilTo = allExpenses.filter(e => !e.purchaseId).reduce((s, e) => s + (e.amount || 0), 0);
@@ -1404,14 +1421,15 @@ const Reports = {
         const expenses = this.inRange(scoped.expenses || [], from, to);
         const operatingExpenses = expenses.filter(e => !e.purchaseId);
         const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0) - this.manualBalance(scoped, 'Sales Revenue', from, to);
-        const commRev = purchases.reduce((s, p) => s + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
-        const rev = salesRev + commRev;
+        const commRev = purchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0) - this.manualBalance(scoped, ['Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
+        const adjustmentGain = this.stockAdjustmentGain(scoped, from, to);
+        const rev = salesRev + commRev + adjustmentGain;
         const salesUntilTo = (scoped.sales || []).filter(s => s.date <= to);
         const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => e.date <= to));
         const cogs = this.cogsForSales(actualSales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)'], from, to);
         const inventoryLoss = this.cogsForSales(virtualSales, inventoryMetrics) + this.manualBalance(scoped, 'Stock Shortage Loss', from, to);
         const exp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0) + this.manualBalance(scoped, 'Operating Expenses', from, to);
-        const gross = salesRev - cogs + commRev;
+        const gross = salesRev - cogs + commRev + adjustmentGain;
         const netProfit = gross - inventoryLoss - exp;
 
         // Expense breakdown
@@ -1423,6 +1441,7 @@ const Reports = {
         const rows = [
             { Section: 'Revenue', Item: 'Gross Sales Revenue', Amount: salesRev },
             { Section: 'Revenue', Item: 'Commission / Other Income', Amount: commRev },
+            { Section: 'Revenue', Item: 'Stock Adjustment Gain', Amount: adjustmentGain },
             { Section: '', Item: 'Total Gross Revenue', Amount: rev },
             { Section: 'COGS', Item: 'Cost of Goods Sold', Amount: cogs },
             { Section: '', Item: 'GROSS PROFIT', Amount: gross },
@@ -1455,7 +1474,7 @@ const Reports = {
         const expenses = this.inRange(scoped.expenses, from, to);
         const operatingExpenses = expenses.filter(e => !e.purchaseId);
 
-        const rev = sales.reduce((s, x) => s + (x.amount || 0), 0) + purchases.reduce((sum, p) => sum + (p.commissionTotal || 0), 0) - this.manualBalance(scoped, ['Sales Revenue', 'Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
+        const rev = sales.filter(s => s.type !== 'stock_adjustment').reduce((s, x) => s + (x.amount || 0), 0) + purchases.reduce((sum, p) => sum + Utils.purchaseAncillaryIncome(p), 0) + this.stockAdjustmentGain(scoped, from, to) - this.manualBalance(scoped, ['Sales Revenue', 'Commission Revenue', 'Other Income', 'Stock Adjustment Gain'], from, to);
         const salesUntilTo = scoped.sales.filter(s => s.date <= to);
         const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases.filter(p => p.date <= to), salesUntilTo, scoped.expenses.filter(e => e.date <= to));
         const cogs = this.cogsForSales(sales, inventoryMetrics) + this.manualBalance(scoped, ['Cost of Goods Sold', 'Cost of Goods Sold (COGS)', 'Stock Shortage Loss'], from, to);

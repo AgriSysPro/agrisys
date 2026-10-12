@@ -19,6 +19,37 @@ const reportDates = () => form({'rp-from':'2026-01-01','rp-to':'2026-12-31'});
         assert.equal(metric('Total Assets'),100);
         assert.equal(metric('Total Equity & Liabilities'),100);
     });
+    await check('PKR purchase deductions reconcile income, profit, and balance-sheet equity', async () => {
+        records.capital_accounts=[{id:'cash',name:'Cash',openingBalance:200,createdAt:'2026-01-01'}];
+        records.purchases=[purchase('P1',{amount:100,payableBeforeAdvance:90,netPayableAmount:90,pkrDeductionsBeforeAdvance:10,totalPkrDeductions:10,commissionTotal:0,mandiTaxTotal:0})];
+        reportDates(); await api.Reports.generatePnL(); assert.equal(metric('Net Profit'),10);
+        await api.Reports.generateBalanceSheet();
+        assert.equal(metric('Total Assets'),300); assert.equal(metric('Total Equity & Liabilities'),300);
+        assert.equal(await api.PartnersMgmt.getBusinessNetProfit(),10);
+        const crop=api.CropAnalysis.computeMetrics('Wheat',records.purchases,[],[]);
+        assert.equal(crop.netPL,10);
+        const journal=await api.Bookkeeping.generateEntries('','2026-12-31');
+        assert.equal(journal.filter(e=>e.account==='Other Income').reduce((s,e)=>s+e.credit,0),10);
+    });
+    await check('Stock increase is recognized as income and retained equity', async () => {
+        records.capital_accounts=[{id:'cash',name:'Cash',openingBalance:100,createdAt:'2026-01-01'}];
+        records.stock_adjustments=[{id:'GAIN',direction:'increase',crop:'Wheat',weight:100,value:40,date:'2026-01-02'}];
+        reportDates(); await api.Reports.generatePnL(); assert.equal(metric('Net Profit'),40);
+        await api.Reports.generateBalanceSheet();
+        assert.equal(metric('Total Assets'),140); assert.equal(metric('Total Equity & Liabilities'),140);
+        assert.equal(await api.PartnersMgmt.getBusinessNetProfit(),40);
+        const adjusted=api.Utils.applyStockAdjustments([],[],records.stock_adjustments);
+        assert.equal(api.CropAnalysis.computeMetrics('Wheat',adjusted.purchases,adjusted.sales,[]).netPL,40);
+        assert.equal(api.Reports.stockAdjustmentGain({stockAdjustments:records.stock_adjustments},'2026-01-03',''),0);
+    });
+    await check('Legacy opening stock adjustment receives equity exactly once', async () => {
+        records.stock_adjustments=[{id:'OPEN',direction:'opening',crop:'Wheat',weight:100,value:80,date:'2026-01-01'}];
+        reportDates(); await api.Reports.generateBalanceSheet();
+        assert.equal(metric('Total Assets'),80); assert.equal(metric('Opening Equity'),80);
+        assert.equal(metric('Total Equity & Liabilities'),80);
+        records.opening_balances=[{id:'OPEN',type:'stock',crop:'Wheat',weight:100,amount:80,date:'2026-01-01'}];
+        await api.Reports.generateBalanceSheet(); assert.equal(metric('Opening Equity'),80);
+    });
     await check('Mandi tax liability missing from balance sheet', async () => {
         records.purchases = [purchase('P1',{netPayableAmount:90,mandiTaxTotal:10,pkrDeductionsBeforeAdvance:10})];
         reportDates(); await api.Reports.generateBalanceSheet();
