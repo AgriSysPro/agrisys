@@ -227,17 +227,21 @@ const Reports = {
             const cropKey = crop.toLowerCase();
             const cPurchases = purchases.filter(p => String(p.crop || '').trim().toLowerCase() === cropKey);
             const cSales = sales.filter(s => String(s.crop || '').trim().toLowerCase() === cropKey);
+            const cActualSales = cSales.filter(s => s.type !== 'stock_adjustment');
+            const cVirtualSales = cSales.filter(s => s.type === 'stock_adjustment');
             const cExpenses = operatingExpenses.filter(e => String(e.crop || '').trim().toLowerCase() === cropKey);
             const adjustmentGain = this.stockAdjustmentGain(scoped, from, to, crop);
-            const revenue = cSales.reduce((s, x) => s + (x.amount || 0), 0) + adjustmentGain;
+            const revenue = cActualSales.reduce((s, x) => s + (x.amount || 0), 0) + adjustmentGain;
             const comm = cPurchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
-            const cost = this.cogsForSales(cSales, inventoryMetrics);
+            const cost = this.cogsForSales(cActualSales, inventoryMetrics);
+            const shortageLoss = this.cogsForSales(cVirtualSales, inventoryMetrics);
+            const totalCropCost = cost + shortageLoss;
             const exp = cExpenses.reduce((s, e) => s + (e.amount || 0), 0);
             const boughtWeight = cPurchases.reduce((s, p) => s + (p.netWeight || 0), 0);
-            const soldWeight = cSales.reduce((s, p) => s + (p.netWeight || 0), 0);
+            const soldWeight = cActualSales.reduce((s, p) => s + (p.netWeight || 0), 0);
             const avgBuyRate = soldWeight > 0 ? cost / (soldWeight / 40) : 0;
             const avgSellRate = soldWeight > 0 ? revenue / (soldWeight / 40) : 0;
-            return { crop, revenue: revenue + comm, cost, expenses: exp, profit: revenue + comm - cost - exp, boughtWeight, soldWeight, avgBuyRate, avgSellRate };
+            return { crop, revenue: revenue + comm, cost: totalCropCost, expenses: exp, profit: revenue + comm - totalCropCost - exp, boughtWeight, soldWeight, avgBuyRate, avgSellRate };
         });
 
         const container = document.getElementById('report-content');
@@ -336,9 +340,9 @@ const Reports = {
         const farmerAdvances = Math.max(0, openingFarmerAdvances + givenAdvances - recoveredAdvances - adjustedAdvances) + this.manualBalance(scoped, 'Advances to Farmers', '', toDate);
         
         const allDebts = this.until(scoped.companyDebts || [], toDate);
-        const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
-        const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
-        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid) + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
+        const debtsSummary = await DebtsMgmt.getDebtsSummary(allDebts);
+        const debtsReceivable = debtsSummary.netReceivable + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
+        const debtOverpayment = debtsSummary.overpaymentLiability;
         
         // 3. Cash & Bank
         let totalCashBank = 0;
@@ -366,7 +370,7 @@ const Reports = {
         const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments - this.manualBalance(scoped, 'Accounts Payable (Farmer)', '', toDate);
         const buyerAdvances = Math.max(0, allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0) - (scoped.salePayments || []).filter(p => p.date <= toDate).reduce((s, p) => s + (p.advanceDeducted || 0), 0)) - this.manualBalance(scoped, 'Advances from Buyers', '', toDate);
         const mandiTax = allPurchases.reduce((sum, p) => sum + (p.mandiTaxTotal || 0), 0) - this.manualBalance(scoped, 'Mandi Tax Payable', '', toDate);
-        const totalLiabilities = accountsPayable + buyerAdvances + mandiTax;
+        const totalLiabilities = accountsPayable + buyerAdvances + mandiTax + debtOverpayment;
 
         // Equity (from Capital Entries)
         const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
@@ -416,6 +420,7 @@ const Reports = {
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Accounts Payable (Farmers)</span><span class="summary-value">PKR ${Utils.formatPKR(accountsPayable)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Mandi Tax Payable</span><span class="summary-value">PKR ${Utils.formatPKR(mandiTax)}</span></div>
                     <div class="summary-row"><span class="summary-label" style="padding-left:24px">Advances from Buyers</span><span class="summary-value">PKR ${Utils.formatPKR(buyerAdvances)}</span></div>
+                    ${debtOverpayment > 0 ? `<div class="summary-row"><span class="summary-label" style="padding-left:24px">Debt Overpayments / Credits</span><span class="summary-value">PKR ${Utils.formatPKR(debtOverpayment)}</span></div>` : ''}
                     <div class="summary-row" style="border-top: 1px solid var(--border-color); margin-top: 8px;"><span class="summary-label"><strong>Total Liabilities</strong></span><span class="summary-value" style="color:var(--accent-danger)"><strong>PKR ${Utils.formatPKR(totalLiabilities)}</strong></span></div>
                     
                     <div style="height:10px;"></div>
@@ -458,8 +463,8 @@ const Reports = {
 
         const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
         const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
-        const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
-        const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
+        const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + Utils.paymentCashAmount(p), 0);
+        const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + Utils.paymentCashAmount(p), 0);
         const cashToAdvances = advances.filter(a => a.amount > 0 && a.sourceStore !== 'purchase_payments').reduce((s, a) => s + a.amount, 0);
         const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
         
@@ -550,7 +555,7 @@ const Reports = {
         Utils.showLoading('Generating P&L PDF...');
 
         try {
-            const scoped = await this.getScopedData();
+            const scoped = await this.getScopedData(from, to);
             const purchases = this.inRange(scoped.purchases, from, to);
             const sales = this.inRange(scoped.sales, from, to);
             const expenses = this.inRange(scoped.expenses, from, to);
@@ -757,7 +762,7 @@ const Reports = {
         Utils.showLoading('Generating Summary PDF...');
 
         try {
-            const scoped = await this.getScopedData();
+            const scoped = await this.getScopedData(from, to);
             const purchases  = this.inRange(scoped.purchases, from, to);
             const sales      = this.inRange(scoped.sales, from, to);
             const expenses   = this.inRange(scoped.expenses, from, to);
@@ -965,7 +970,7 @@ const Reports = {
         Utils.showLoading('Generating Balance Sheet PDF...');
 
         try {
-            const scoped = await this.getScopedData();
+            const scoped = await this.getScopedData('', toDate);
             const allPurchases = (scoped.purchases || []).filter(p => p.date <= toDate);
             const allSales = (scoped.sales || []).filter(s => s.date <= toDate);
             const allExpenses = (scoped.expenses || []).filter(e => e.date <= toDate);
@@ -987,9 +992,9 @@ const Reports = {
             const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances) + this.manualBalance(scoped, 'Advances to Farmers', '', toDate);
             const allDebts = this.until(scoped.companyDebts || [], toDate);
-            const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
-            const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
-            const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid) + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
+            const debtsSummary = await DebtsMgmt.getDebtsSummary(allDebts);
+            const debtsReceivable = debtsSummary.netReceivable + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
+            const debtOverpayment = debtsSummary.overpaymentLiability;
 
             let totalCashBank = 0;
             allAccs.forEach(acc => {
@@ -1011,7 +1016,7 @@ const Reports = {
             const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments - this.manualBalance(scoped, 'Accounts Payable (Farmer)', '', toDate);
             const buyerAdvances = Math.max(0, allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0) - (scoped.salePayments || []).filter(p => p.date <= toDate).reduce((s, p) => s + (p.advanceDeducted || 0), 0)) - this.manualBalance(scoped, 'Advances from Buyers', '', toDate);
             const mandiTax = allPurchases.reduce((sum, p) => sum + (p.mandiTaxTotal || 0), 0) - this.manualBalance(scoped, 'Mandi Tax Payable', '', toDate);
-            const totalLiabilities = accountsPayable + buyerAdvances + mandiTax;
+            const totalLiabilities = accountsPayable + buyerAdvances + mandiTax + debtOverpayment;
 
             const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
             const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
@@ -1088,6 +1093,7 @@ const Reports = {
             drawRow('Accounts Payable (Farmers)', accountsPayable);
             drawRow('Advances from Buyers', buyerAdvances);
             drawRow('Mandi Tax Payable', mandiTax);
+            if (debtOverpayment > 0) drawRow('Debt Overpayments / Credits', debtOverpayment);
             drawRow('Total Current Liabilities', totalLiabilities, true);
             y += 4;
             doc.setFont('helvetica', 'bold');
@@ -1144,8 +1150,8 @@ const Reports = {
             }, 0);
             const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
             const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
-            const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
-            const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
+            const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + Utils.paymentCashAmount(p), 0);
+            const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + Utils.paymentCashAmount(p), 0);
             const cashToAdvances = advances.filter(a => a.amount > 0 && a.sourceStore !== 'purchase_payments').reduce((s, a) => s + a.amount, 0);
             const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
             const journalCash = this.journalCashActivity(scoped, 'operating', fromDate, toDate);
@@ -1269,7 +1275,7 @@ const Reports = {
         const toDate = document.getElementById('rp-to').value || Utils.todayISO();
         if (!Utils.requireExcel()) return;
 
-        const scoped = await this.getScopedData();
+        const scoped = await this.getScopedData('', toDate);
         const allPurchases = (scoped.purchases || []).filter(p => p.date <= toDate);
         const allSales = (scoped.sales || []).filter(s => s.date <= toDate);
         const allExpenses = (scoped.expenses || []).filter(e => e.date <= toDate);
@@ -1291,9 +1297,9 @@ const Reports = {
         const adjustedAdvances = allPurchasePayments.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
         const farmerAdvances = Math.max(0, openingAdvances + givenAdvances - recoveredAdvances - adjustedAdvances) + this.manualBalance(scoped, 'Advances to Farmers', '', toDate);
         const allDebts = this.until(scoped.companyDebts || [], toDate);
-        const debtsGiven = allDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
-        const debtsRepaid = allDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
-        const debtsReceivable = Math.max(0, debtsGiven - debtsRepaid) + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
+        const debtsSummary = await DebtsMgmt.getDebtsSummary(allDebts);
+        const debtsReceivable = debtsSummary.netReceivable + this.manualBalance(scoped, 'Debts / Loans Receivable', '', toDate);
+        const debtOverpayment = debtsSummary.overpaymentLiability;
 
         let totalCashBank = 0;
         allAccs.forEach(acc => {
@@ -1315,7 +1321,7 @@ const Reports = {
         const accountsPayable = totalPurchasesCost - totalPurchasesPaid + openingPayable - openingPayments - this.manualBalance(scoped, 'Accounts Payable (Farmer)', '', toDate);
         const buyerAdvances = Math.max(0, allOpenings.filter(o => o.type === 'buyer_advance').reduce((s, o) => s + (o.amount || 0), 0) - (scoped.salePayments || []).filter(p => p.date <= toDate).reduce((s, p) => s + (p.advanceDeducted || 0), 0)) - this.manualBalance(scoped, 'Advances from Buyers', '', toDate);
         const mandiTax = allPurchases.reduce((sum, p) => sum + (p.mandiTaxTotal || 0), 0) - this.manualBalance(scoped, 'Mandi Tax Payable', '', toDate);
-        const totalLiabilities = accountsPayable + buyerAdvances + mandiTax;
+        const totalLiabilities = accountsPayable + buyerAdvances + mandiTax + debtOverpayment;
 
         const capitalEntries = this.until(scoped.capitalEntries || [], toDate);
         const ownerCapital = capitalEntries.filter(e => e.type === 'contribution').reduce((s, e) => s + e.amount, 0) -
@@ -1349,6 +1355,7 @@ const Reports = {
             { Category: 'LIABILITIES', Item: 'Accounts Payable (Farmers)', Amount: accountsPayable },
             { Category: 'LIABILITIES', Item: 'Advances from Buyers', Amount: buyerAdvances },
             { Category: 'LIABILITIES', Item: 'Mandi Tax Payable', Amount: mandiTax },
+            ...(debtOverpayment > 0 ? [{ Category: 'LIABILITIES', Item: 'Debt Overpayments / Credits', Amount: debtOverpayment }] : []),
             { Category: 'LIABILITIES', Item: 'TOTAL LIABILITIES', Amount: totalLiabilities },
             { Category: 'EQUITY', Item: 'Opening Equity', Amount: openingEquity },
             { Category: 'EQUITY', Item: 'Owner Capital Contributions', Amount: ownerCapital },
@@ -1390,8 +1397,8 @@ const Reports = {
         }, 0);
         const cashFromSales = cashFromInitialSales + salePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
         const cashToPurchases = cashToInitialPurchases + purchasePayments.reduce((s, x) => s + Utils.paymentCashAmount(x), 0);
-        const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
-        const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
+        const cashFromOpeningReceivables = openingBalancePayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + Utils.paymentCashAmount(p), 0);
+        const cashToOpeningPayables = openingBalancePayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + Utils.paymentCashAmount(p), 0);
         const cashToAdvances = advances.filter(a => a.amount > 0 && a.sourceStore !== 'purchase_payments').reduce((s, a) => s + a.amount, 0);
         const cashToExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
         const journalCash = this.journalCashActivity(scoped, 'operating', fromDate, toDate);
@@ -1453,7 +1460,7 @@ const Reports = {
         if (!from || !to) { Utils.showToast('Generate report first', 'warning'); return; }
         if (!Utils.requireExcel()) return;
         
-        const scoped = await this.getScopedData();
+        const scoped = await this.getScopedData(from, to);
         const purchases = this.inRange(scoped.purchases || [], from, to);
         const sales = this.inRange(scoped.sales || [], from, to);
         const actualSales = sales.filter(s => s.type !== 'stock_adjustment');
@@ -1508,7 +1515,7 @@ const Reports = {
         if (!from || !to) { Utils.showToast('Select date range', 'warning'); return; }
         if (!Utils.requireExcel()) return;
 
-        const scoped = await this.getScopedData();
+        const scoped = await this.getScopedData(from, to);
         const purchases = this.inRange(scoped.purchases, from, to);
         const sales = this.inRange(scoped.sales, from, to);
         const expenses = this.inRange(scoped.expenses, from, to);

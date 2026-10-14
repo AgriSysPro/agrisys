@@ -193,9 +193,10 @@ const Bookkeeping = {
         // ── Purchase payment entries ──
         pPayments.forEach(p => {
             const totalPay = p.amount || 0;
-            if (p.excessAdvance > 0) entries.push({ date: p.date, description: `Excess farmer payment: ${p.farmerName}`, account: 'Advances to Farmers', debit: p.excessAdvance, credit: 0, type: 'advance' });
+            const excess = p.excessAdvance || 0;
             const advDeduct = p.advanceDeducted || 0;
-            const netCash = p.netCashAmount !== undefined ? p.netCashAmount : Math.max(0, totalPay - advDeduct);
+            const netCash = Math.max(0, p.netCashAmount !== undefined ? Math.max(p.netCashAmount, totalPay + excess - advDeduct) : (totalPay + excess - advDeduct));
+            if (excess > 0) entries.push({ date: p.date, description: `Excess farmer payment: ${p.farmerName}`, account: 'Advances to Farmers', debit: excess, credit: 0, type: 'advance' });
 
             entries.push({ date: p.date, description: `Payment to: ${p.farmerName} (#${p.purchaseId}) [${(p.mode||'Cash').toUpperCase()}]`, account: 'Accounts Payable (Farmer)', debit: totalPay, credit: 0, type: 'payment' });
             if (advDeduct > 0) {
@@ -258,7 +259,8 @@ const Bookkeeping = {
         });
 
         // ── Manual Journal Entries ──
-        const journalEntries = await DB.getAll('journal_entries') || [];
+        const allJournalEntries = await DB.getAll('journal_entries') || [];
+        const journalEntries = Utils.filterBySeason(allJournalEntries, activeSeason);
         journalEntries.forEach(j => {
             const canonical = name => name === 'Cost of Goods Sold (COGS)' ? 'Cost of Goods Sold' : name.startsWith('Bank/Cash: ') ? 'Cash / Bank' : name;
             entries.push({ date: j.date, description: `Manual JV: ${j.description || ''}`, account: canonical(j.debitAccount), debit: j.amount, credit: 0, type: 'journal' });

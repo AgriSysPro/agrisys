@@ -47,8 +47,13 @@ const ExportUtils = {
                 return [key, value];
             }));
             const transactions = data.capital_transactions || [];
-            for (const [store, sheetName] of Object.entries(labels)) {
+            const allStoreNames = Object.keys(data);
+            const storesToExport = [...new Set([...Object.keys(labels), ...allStoreNames])];
+            for (const store of storesToExport) {
+                if (store === 'warehouse_stock' || store === 'party_running_balances') continue;
+                const sheetName = (labels[store] || store.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())).slice(0, 31);
                 let rows = Array.isArray(data[store]) ? data[store] : [];
+                if (!rows.length && !labels[store]) continue;
                 if (store === 'settings') rows = scrubSecrets(rows);
                 if (store === 'capital_accounts') {
                     rows = rows.map(account => ({

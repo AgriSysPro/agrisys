@@ -124,6 +124,7 @@ const Utils = {
     formatPKR(num) {
         if (num === null || num === undefined || isNaN(num)) return '0.00';
         num = parseFloat(num);
+        if (Math.abs(num) < 0.005) num = 0;
         const parts = num.toFixed(2).split('.');
         let intPart = parts[0];
         const decPart = parts[1];
@@ -620,6 +621,12 @@ const Utils = {
                 ops.push({ storeName: store, action: 'put', data: record });
             }
         }
+        for (const record of await DB.getAll('company_debts')) {
+            if ((record.personName || '').trim().toLowerCase() === oldName) {
+                record.personName = name;
+                ops.push({ storeName: 'company_debts', action: 'put', data: record });
+            }
+        }
         return ops;
     },
 
@@ -833,7 +840,7 @@ const Utils = {
         });
 
         const debts = this.filterBySeason(await DB.getAll('company_debts'), activeSeason)
-            .filter(d => (d.personName || '').trim().toLowerCase() === fNameLower);
+            .filter(d => (d.personName || d.borrowerName || '').trim().toLowerCase() === fNameLower);
         debts.forEach(d => {
             transactions.push({
                 rawDate: d.date || d.createdAt,
@@ -849,24 +856,44 @@ const Utils = {
         });
 
         let scopedTransactions = transactions;
-        if (from) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
+        let priorBalance = 0;
+        if (from) {
+            const priorTxs = transactions.filter(t => String(t.rawDate || '') < from);
+            priorBalance = priorTxs.reduce((sum, t) => sum + (t.credit || 0) - (t.debit || 0), 0);
+            scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
+        }
         if (to) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') <= to);
         this.sortLedgerTransactions(scopedTransactions);
-        let balance = 0;
+        let balance = priorBalance;
         let totalDebit = 0;
         let totalCredit = 0;
-        const rows = scopedTransactions.map(t => {
+        const rows = [];
+        if (from && transactions.some(t => String(t.rawDate || '') < from)) {
+            rows.push({
+                rawDate: from,
+                createdAt: '',
+                sortKey: '0-bf',
+                date: this.formatDate(from),
+                ref: 'B/F',
+                type: 'Brought Forward',
+                description: 'Balance Brought Forward',
+                debit: priorBalance < 0 ? Math.abs(priorBalance) : 0,
+                credit: priorBalance > 0 ? priorBalance : 0,
+                balance: priorBalance
+            });
+        }
+        scopedTransactions.forEach(t => {
             totalCredit += t.credit || 0;
             totalDebit += t.debit || 0;
             balance += (t.credit || 0) - (t.debit || 0);
-            return { ...t, balance };
+            rows.push({ ...t, balance });
         });
         const openAdvances = await this.getFarmerAvailableAdvance(farmerName, { season: activeSeason, untilDate: to || null });
 
         return {
             partyName: farmerName,
             rows,
-            totals: { debit: totalDebit, credit: totalCredit, balance, openAdvances },
+            totals: { debit: totalDebit, credit: totalCredit, balance, openAdvances, priorBalance },
             counts: { purchases: purchases.length, payments: payments.length + openingPayments.length },
             period: { from, to }
         };
@@ -974,7 +1001,7 @@ const Utils = {
         });
 
         const debts = this.filterBySeason(await DB.getAll('company_debts'), activeSeason)
-            .filter(d => (d.personName || '').trim().toLowerCase() === bNameLower);
+            .filter(d => (d.personName || d.borrowerName || '').trim().toLowerCase() === bNameLower);
         debts.forEach(d => {
             transactions.push({
                 rawDate: d.date || d.createdAt,
@@ -990,23 +1017,43 @@ const Utils = {
         });
 
         let scopedTransactions = transactions;
-        if (from) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
+        let priorBalance = 0;
+        if (from) {
+            const priorTxs = transactions.filter(t => String(t.rawDate || '') < from);
+            priorBalance = priorTxs.reduce((sum, t) => sum + (t.debit || 0) - (t.credit || 0), 0);
+            scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') >= from);
+        }
         if (to) scopedTransactions = scopedTransactions.filter(t => String(t.rawDate || '') <= to);
         this.sortLedgerTransactions(scopedTransactions);
-        let balance = 0;
+        let balance = priorBalance;
         let totalDebit = 0;
         let totalCredit = 0;
-        const rows = scopedTransactions.map(t => {
+        const rows = [];
+        if (from && transactions.some(t => String(t.rawDate || '') < from)) {
+            rows.push({
+                rawDate: from,
+                createdAt: '',
+                sortKey: '0-bf',
+                date: this.formatDate(from),
+                ref: 'B/F',
+                type: 'Brought Forward',
+                description: 'Balance Brought Forward',
+                debit: priorBalance > 0 ? priorBalance : 0,
+                credit: priorBalance < 0 ? Math.abs(priorBalance) : 0,
+                balance: priorBalance
+            });
+        }
+        scopedTransactions.forEach(t => {
             totalDebit += t.debit || 0;
             totalCredit += t.credit || 0;
             balance += (t.debit || 0) - (t.credit || 0);
-            return { ...t, balance };
+            rows.push({ ...t, balance });
         });
 
         return {
             partyName: buyerName,
             rows,
-            totals: { debit: totalDebit, credit: totalCredit, balance },
+            totals: { debit: totalDebit, credit: totalCredit, balance, priorBalance },
             counts: { sales: sales.length, payments: payments.length + openingPayments.length },
             period: { from, to }
         };

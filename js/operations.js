@@ -723,7 +723,8 @@ const InventoryLots = {
 };
 
 const AgingReports = {
-    bucket(days) {
+    bucket(days, isFuture = false) {
+        if (isFuture) return 'Current / Not Due';
         if (days <= 7) return '0-7 days';
         if (days <= 15) return '8-15 days';
         if (days <= 30) return '16-30 days';
@@ -759,8 +760,10 @@ const AgingReports = {
         }).concat(openings.filter(o => o.type === 'buyer_receivable').map(o => ({ party: o.partyName, source: 'Opening Balance', date: o.date, balance: Math.max(0, (o.amount || 0) - openingSettledAsOf(o)), type: 'buyer' })))
             .filter(r => r.balance > 0);
         const decorate = r => {
-            const days = Math.max(0, Math.floor((today - new Date(r.date)) / (24 * 60 * 60 * 1000)));
-            return { ...r, days, bucket: this.bucket(days) };
+            const rawDiff = Math.floor((today - new Date(r.date)) / (24 * 60 * 60 * 1000));
+            const isFuture = rawDiff < 0;
+            const days = isFuture ? 0 : rawDiff;
+            return { ...r, days, isFuture, bucket: this.bucket(days, isFuture) };
         };
         return { farmerRows: farmerRows.map(decorate), buyerRows: buyerRows.map(decorate) };
     },
@@ -783,7 +786,7 @@ const AgingReports = {
             <td>${Utils.formatDate(r.date)}</td>
             <td class="text-right font-bold">PKR ${Utils.formatPKR(r.balance)}</td>
             <td class="text-right">${r.days}</td>
-            <td><span class="badge ${r.days > 30 ? 'badge-danger' : 'badge-warning'}">${r.bucket}</span></td>
+            <td><span class="badge ${r.bucket === 'Current / Not Due' ? 'badge-success' : r.days > 30 ? 'badge-danger' : 'badge-warning'}">${r.bucket}</span></td>
         </tr>`).join('') || '<tr><td colspan="6" class="text-center" style="color:var(--text-muted)">No outstanding balances</td></tr>';
     },
 

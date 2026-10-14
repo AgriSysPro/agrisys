@@ -28,6 +28,9 @@ const Farmers = {
         const allOpenings = await DB.getAll('opening_balances');
         const openings = untilDate ? allOpenings.filter(o => o.date <= untilDate) : allOpenings;
 
+        const allDebts = await DB.getAll('company_debts');
+        const debts = untilDate ? allDebts.filter(d => d.date <= untilDate) : allDebts;
+
         const search = (document.getElementById('f-search').value || '').toLowerCase();
         const filtered = farmers.filter(f => !search || f.name.toLowerCase().includes(search) || (f.phone || '').includes(search));
 
@@ -49,7 +52,11 @@ const Farmers = {
             const recoveredAdv = fp.reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const adjustedAdv = purchasePayments.filter(p => (!untilDate || p.date <= untilDate) && p.farmerName && p.farmerName.toLowerCase() === f.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
             const openAdv = Math.max(0, openingAdvance + givenAdv - recoveredAdv - adjustedAdv);
-            const balance = totalAmt - totalPaid;
+
+            const fDebts = debts.filter(d => (d.personName || d.borrowerName || '').trim().toLowerCase() === f.name.toLowerCase());
+            const debtsGiven = fDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+            const debtsRepaid = fDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+            const balance = totalAmt - totalPaid + debtsRepaid - debtsGiven;
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(f.name, search)}</td>
                 <td>${Utils.highlightText(f.phone || '-', search)}</td>
@@ -295,7 +302,7 @@ const Farmers = {
         ws['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 46 }, { wch: 18 }, { wch: 22 }, { wch: 22 }];
         XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
         XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
-        XLSX.writeFile(wb, `${farmer.name.replace(/\\s+/g, '_')}_Ledger_${Utils.todayISO()}.xlsx`);
+        XLSX.writeFile(wb, `${farmer.name.replace(/\s+/g, '_')}_Ledger_${Utils.todayISO()}.xlsx`);
         Utils.showToast('Farmer ledger exported!');
     }
 };

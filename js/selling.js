@@ -300,8 +300,8 @@ const Selling = {
         if (d.rate <= 0) return Utils.markInvalid('s-rate', 'Rate must be greater than 0');
         if (d.amountReceived < 0) { Utils.showToast('Received amount cannot be negative', 'error'); return; }
         if (d.amountReceived > d.amount) { Utils.showToast('Received amount cannot exceed sale amount', 'error'); return; }
-        const linkedReceipts = await Utils.getInvoicePayments('sale_payments', 'saleId', d.id);
-        const laterReceived = Utils.sumBy(linkedReceipts, 'amount');
+        const allSalePayments = await DB.getAll('sale_payments');
+        const laterReceived = allSalePayments.reduce((s, p) => s + Utils.paymentAllocatedTo(p, d.id, 'saleId'), 0);
         if (d.amountReceived + 0.01 < laterReceived) { Utils.showToast('Received total cannot be lower than recorded receipts', 'error'); return; }
         const initialReceived = Math.max(0, (d.amountReceived || 0) - laterReceived);
         if (initialReceived > 0 && !d.initialReceiptAccountId) { Utils.showToast('Select cash/bank account for initial receipt', 'error'); return; }
@@ -324,6 +324,7 @@ const Selling = {
         }
 
         const ops = await this.buildUnitOfWorkOperations(d, existing);
+        if (!ops) return;
         try {
             await Utils.validateStockHistory(ops);
             await DB.commitUnitOfWork(ops, snapshot);

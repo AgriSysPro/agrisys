@@ -138,8 +138,14 @@ const App = {
             case 'reports': {
                 const from = document.getElementById('rp-from');
                 const to = document.getElementById('rp-to');
-                if (from && !from.value) from.value = Utils.dateToISO(new Date(new Date().getFullYear(), 0, 1));
-                if (to && !to.value) to.value = Utils.todayISO();
+                const activeSeason = typeof SeasonManager !== 'undefined' ? await SeasonManager.getActiveSeason() : null;
+                if (activeSeason && from && to && (!from.value || !to.value)) {
+                    from.value = activeSeason.startDate;
+                    to.value = activeSeason.endDate;
+                } else {
+                    if (from && !from.value) from.value = Utils.dateToISO(new Date(new Date().getFullYear(), 0, 1));
+                    if (to && !to.value) to.value = Utils.todayISO();
+                }
                 await Reports.generate();
                 break;
             }
@@ -335,6 +341,22 @@ const App = {
             netPartnersEquity = (partSummary.totalContributions || 0) + totalAllocatedProfit - (partSummary.totalDrawings || 0) - (partSummary.totalProfitPayouts || 0);
         }
 
+        let rawOpenings = await DB.getAll('opening_balances');
+        let rawOpeningPayments = await DB.getAll('opening_balance_payments');
+        let openings = rawOpenings;
+        let openingPayments = rawOpeningPayments;
+        if (activeSeason) {
+            openings = SeasonManager.filterByActiveSeason(rawOpenings, activeSeason);
+            openingPayments = SeasonManager.filterByActiveSeason(rawOpeningPayments, activeSeason);
+        }
+        const openingFarmerPayable = openings.filter(o => o.type === 'farmer_payable').reduce((s, o) => s + (o.amount || 0), 0);
+        const openingFarmerPaid = openingPayments.filter(p => p.type === 'farmer_payable').reduce((s, p) => s + (p.amount || 0), 0);
+        const openingBuyerReceivable = openings.filter(o => o.type === 'buyer_receivable').reduce((s, o) => s + (o.amount || 0), 0);
+        const openingBuyerReceived = openingPayments.filter(p => p.type === 'buyer_receivable').reduce((s, p) => s + (p.amount || 0), 0);
+
+        const payableToFarmers = (totalPurchaseAmt - totalPaid) + (openingFarmerPayable - openingFarmerPaid);
+        const receivableFromBuyers = (totalSaleAmt - totalReceived) + (openingBuyerReceivable - openingBuyerReceived);
+
         document.getElementById('dashboard-stats').innerHTML = `
             <div class="stat-card blue">
                 <div class="stat-label">Total Purchases</div>
@@ -348,12 +370,12 @@ const App = {
             </div>
             <div class="stat-card orange">
                 <div class="stat-label">Payable to Farmers</div>
-                <div class="stat-value">PKR ${Utils.formatPKR(totalPurchaseAmt - totalPaid)}</div>
-                <div class="stat-sub">${pendingFarmers} unpaid · Paid: PKR ${Utils.formatPKR(totalPaid)}</div>
+                <div class="stat-value">PKR ${Utils.formatPKR(payableToFarmers)}</div>
+                <div class="stat-sub">${pendingFarmers} unpaid · Paid: PKR ${Utils.formatPKR(totalPaid + openingFarmerPaid)}</div>
             </div>
             <div class="stat-card purple">
                 <div class="stat-label">Receivable from Buyers</div>
-                <div class="stat-value">PKR ${Utils.formatPKR(totalSaleAmt - totalReceived)}</div>
+                <div class="stat-value">PKR ${Utils.formatPKR(receivableFromBuyers)}</div>
                 <div class="stat-sub">${pendingBuyers} outstanding · Expenses: PKR ${Utils.formatPKR(totalExpenses)}</div>
             </div>
         ` + `

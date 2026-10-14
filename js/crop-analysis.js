@@ -117,10 +117,14 @@ const CropAnalysis = {
         // Use lots logic to determine COGS
         const lotsInfo = Utils.calculateInventoryLots(inventoryPurchases, inventorySales, inventoryExpenses);
         const periodSaleIds = new Set(actualSales.map(s => s.id));
+        const virtualSales = fs.filter(s => s.type === 'stock_adjustment');
+        const virtualSaleIds = new Set(virtualSales.map(s => s.id));
         let totalCogs = 0;
+        let shortageLoss = 0;
         let inventoryValue = 0;
         Object.values(lotsInfo).forEach(lot => {
             totalCogs += Object.entries(lot.saleCogs || {}).reduce((sum, [saleId, cogs]) => sum + (periodSaleIds.has(saleId) ? cogs : 0), 0);
+            shortageLoss += Object.entries(lot.saleCogs || {}).reduce((sum, [saleId, cogs]) => sum + (virtualSaleIds.has(saleId) ? cogs : 0), 0);
             inventoryValue += lot.inventoryValue || 0;
         });
 
@@ -131,15 +135,15 @@ const CropAnalysis = {
         // Expenses linked to purchases are already in COGS. We only subtract unlinked expenses.
         const unlinkedExpenses = Utils.sumBy(fe.filter(e => !e.purchaseId), 'amount');
 
-        // Net P&L (Sale Revenue + Commission Revenue - COGS - Unlinked Expenses)
-        const netPL = saleAmount + totalCommission + stockAdjustmentGain - totalCogs - unlinkedExpenses;
+        // Net P&L (Sale Revenue + Commission Revenue + Stock Adjustment Gain - COGS - Shortage Loss - Unlinked Expenses)
+        const netPL = saleAmount + totalCommission + stockAdjustmentGain - totalCogs - shortageLoss - unlinkedExpenses;
 
         // Remaining amount (purchase balance - sale balance)
         const remainingAmount = purchaseBalance - saleBalance;
 
         return {
             purchaseCount, purchaseWeight, purchaseMaund, purchaseAmount, purchaseAvgRate,
-            purchasePaid, purchaseBalance, totalCommission,
+            purchasePaid, purchaseBalance, totalCommission, stockAdjustmentGain, shortageLoss, totalCogs,
             saleCount, saleWeight, saleMaund, saleAmount, saleAvgRate,
             saleReceived, saleBalance,
             netWeight, netMaund,

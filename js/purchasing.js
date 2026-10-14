@@ -470,6 +470,7 @@ const Purchasing = {
         }
 
         const ops = await this.buildUnitOfWorkOperations(data, existing);
+        if (!ops) return;
         try {
             await Utils.validateStockHistory(ops);
             await Utils.validateAdvanceHistory(ops);

@@ -56,7 +56,7 @@ const CryptoUtils = {
 
         return JSON.stringify({
             _encrypted: true,
-            _version: 10,
+            _version: typeof DB !== 'undefined' && DB.DB_VERSION ? DB.DB_VERSION : 14,
             format: 'AGRISYS_AES_GCM',
             salt: this.bufferToBase64(salt),
             iv: this.bufferToBase64(iv),

@@ -17,11 +17,23 @@ const BankAccounts = {
         let currentTotal = 0;
         let totalDeposits = 0;
         let totalWithdrawals = 0;
+
+        const txByAccount = {};
+        transactions.forEach(t => {
+            if (!txByAccount[t.accountId]) txByAccount[t.accountId] = [];
+            txByAccount[t.accountId].push(t);
+        });
+        const allTxByAccount = {};
+        allTransactions.forEach(t => {
+            if (!allTxByAccount[t.accountId]) allTxByAccount[t.accountId] = [];
+            allTxByAccount[t.accountId].push(t);
+        });
+
         accounts.forEach(a => {
-            const txs = transactions.filter(t => t.accountId === a.id);
+            const txs = txByAccount[a.id] || [];
             const deposits = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
             const withdrawals = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
-            currentTotal += Utils.capitalAccountBalance(a, allTransactions);
+            currentTotal += Utils.capitalAccountBalance(a, allTxByAccount[a.id] || []);
             totalDeposits += deposits;
             totalWithdrawals += withdrawals;
         });
@@ -50,11 +62,22 @@ const BankAccounts = {
             return;
         }
 
+        const txByAccount = {};
+        transactions.forEach(t => {
+            if (!txByAccount[t.accountId]) txByAccount[t.accountId] = [];
+            txByAccount[t.accountId].push(t);
+        });
+        const allTxByAccount = {};
+        allTransactions.forEach(t => {
+            if (!allTxByAccount[t.accountId]) allTxByAccount[t.accountId] = [];
+            allTxByAccount[t.accountId].push(t);
+        });
+
         container.innerHTML = accounts.map(a => {
-            const txs = transactions.filter(t => t.accountId === a.id).sort((x, y) => new Date(x.date) - new Date(y.date));
+            const txs = (txByAccount[a.id] || []).sort((x, y) => new Date(x.date) - new Date(y.date));
             const dep = txs.filter(t => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
             const wdr = txs.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
-            const current = Utils.capitalAccountBalance(a, allTransactions);
+            const current = Utils.capitalAccountBalance(a, allTxByAccount[a.id] || []);
             const sparkSvg = this.generateSparkline(txs, a.openingBalance || 0);
             const isCash = a.type === 'cash';
             const icon = isCash ? 'wallet' : 'landmark';

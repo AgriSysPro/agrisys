@@ -105,6 +105,10 @@ const Expenses = {
             accountId: document.getElementById('exp-account').value,
             createdAt: new Date().toISOString()
         };
+        if (data.purchaseId) {
+            const linkedPurchase = await DB.get('purchases', data.purchaseId);
+            if (!linkedPurchase) { Utils.showToast('Selected purchase receipt does not exist', 'error'); return; }
+        }
         const snapshot = await DB.financialSnapshot();
         const tx = { id: Utils.generateId(), accountId: data.accountId, type: 'withdrawal', amount, date: data.date,
             description: `Expense: ${data.type}${data.description ? ' - ' + data.description : ''}`,

@@ -11,18 +11,20 @@ const PartnersMgmt = {
     // ── Calculate Business Net Profit (Retained Earnings before partner distributions) ──
     async getBusinessNetProfit() {
         const activeSeason = await Utils.getActiveSeason();
-        const scoped = await Reports.getScopedData('', activeSeason?.endDate || '');
+        const from = activeSeason?.startDate || '';
+        const to = activeSeason?.endDate || '';
+        const scoped = await Reports.getScopedData(from, to);
         const purchases = Utils.filterBySeason(scoped.purchases, activeSeason);
         const sales = Utils.filterBySeason(scoped.sales, activeSeason);
         const expenses = Utils.filterBySeason(scoped.expenses, activeSeason);
-        const adjusted = { purchases: scoped.purchases, sales };
         const operatingExpenses = expenses.filter(e => !e.purchaseId);
 
-        const actualSales = adjusted.sales.filter(s => s.type !== 'stock_adjustment');
-        const virtualSales = adjusted.sales.filter(s => s.type === 'stock_adjustment');
+        const actualSales = sales.filter(s => s.type !== 'stock_adjustment');
+        const virtualSales = sales.filter(s => s.type === 'stock_adjustment');
         const salesRev = actualSales.reduce((s, x) => s + (x.amount || 0), 0);
         const commRev = purchases.reduce((s, p) => s + Utils.purchaseAncillaryIncome(p), 0);
-        const inventoryMetrics = Utils.calculateInventoryLots(scoped.purchases, scoped.sales, scoped.expenses.filter(e => !activeSeason || e.date <= activeSeason.endDate));
+        const salesUntilTo = (scoped.sales || []).filter(s => !to || s.date <= to);
+        const inventoryMetrics = Utils.calculateInventoryLots((scoped.purchases || []).filter(p => !to || p.date <= to), salesUntilTo, (scoped.expenses || []).filter(e => !to || e.date <= to));
 
         let cogs = 0;
         let invLoss = 0;
@@ -37,8 +39,8 @@ const PartnersMgmt = {
             }, 0);
         }
         const opExp = operatingExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-        const adjustmentGain = Reports.stockAdjustmentGain(scoped, activeSeason?.startDate || '', activeSeason?.endDate || '');
-        return (salesRev + commRev + adjustmentGain) - cogs - invLoss - opExp + Reports.manualProfit(scoped, activeSeason?.startDate || '', activeSeason?.endDate || '');
+        const adjustmentGain = Reports.stockAdjustmentGain(scoped, from, to);
+        return (salesRev + commRev + adjustmentGain) - cogs - invLoss - opExp + Reports.manualProfit(scoped, from, to);
     },
 
     // ── Partners Summary Helper ──
@@ -286,8 +288,8 @@ const PartnersMgmt = {
         const newTotal = otherSum + sharePercentage;
 
         if (newTotal > 100.01) {
-            const ok = await Utils.confirm(`Adding this percentage brings total allocation to ${newTotal.toFixed(1)}% (which exceeds 100%). Continue anyway?`);
-            if (!ok) return;
+            Utils.showToast(`Total partner share allocation (${newTotal.toFixed(1)}%) cannot exceed 100%`, 'error');
+            return;
         }
 
         const existing = await DB.get('partners', id);

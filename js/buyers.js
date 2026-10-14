@@ -25,6 +25,9 @@ const Buyers = {
         const allOpenings = await DB.getAll('opening_balances');
         const openings = untilDate ? allOpenings.filter(o => o.date <= untilDate) : allOpenings;
 
+        const allDebts = await DB.getAll('company_debts');
+        const debts = untilDate ? allDebts.filter(d => d.date <= untilDate) : allDebts;
+
         const search = (document.getElementById('b-search').value || '').toLowerCase();
         const filtered = buyers.filter(b => !search || b.name.toLowerCase().includes(search) || (b.phone || '').includes(search));
 
@@ -43,7 +46,11 @@ const Buyers = {
             const totalAmt = openingReceivable + bs.reduce((s, x) => s + (x.amount || 0), 0);
             const totalRcvd = openingReceived + bs.reduce((s, x) => s + Utils.paymentTotalFor(x, salePayments, 'saleId', 'amountReceived', untilDate), 0);
             const appliedDeposit = salePayments.filter(p => (!untilDate || p.date <= untilDate) && (p.buyerName || '').toLowerCase() === b.name.toLowerCase()).reduce((s, p) => s + (p.advanceDeducted || 0), 0);
-            const balance = totalAmt - totalRcvd - Math.max(0, openingAdvance - appliedDeposit);
+            
+            const bDebts = debts.filter(d => (d.personName || d.borrowerName || '').trim().toLowerCase() === b.name.toLowerCase());
+            const debtsGiven = bDebts.filter(d => d.type === 'given').reduce((s, d) => s + (d.amount || 0), 0);
+            const debtsRepaid = bDebts.filter(d => d.type === 'repaid').reduce((s, d) => s + (d.amount || 0), 0);
+            const balance = totalAmt - totalRcvd - Math.max(0, openingAdvance - appliedDeposit) + debtsGiven - debtsRepaid;
             return `<tr>
                 <td class="font-bold">${Utils.highlightText(b.name, search)}</td>
                 <td>${Utils.highlightText(b.phone || '-', search)}</td>
@@ -226,7 +233,7 @@ const Buyers = {
         ws['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 46 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
         XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
         XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
-        XLSX.writeFile(wb, `${buyer.name.replace(/\\s+/g, '_')}_Buyer_Ledger_${Utils.todayISO()}.xlsx`);
+        XLSX.writeFile(wb, `${buyer.name.replace(/\s+/g, '_')}_Buyer_Ledger_${Utils.todayISO()}.xlsx`);
         Utils.showToast('Buyer ledger exported!');
     },
 
