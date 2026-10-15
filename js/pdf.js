@@ -793,17 +793,26 @@ const ReceiptPDF = {
             const { jsPDF } = window.jspdf;
             const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
+            const isFarmer = type === 'farmer';
+            const partyName = isFarmer ? payment.farmerName : payment.buyerName;
+            const paidAmount = payment.totalPaidCash ?? payment.amount ?? 0;
+            const qrText = `AgriSys ${isFarmer ? 'Farmer Payment' : 'Buyer Receipt'}\nNo: ${payment.receiptNo || payment.id}\nDate: ${payment.date}\nParty: ${partyName || '-'}\nAmount: PKR ${paidAmount}`;
+            const qrImage = template.showQR === false ? null : await this.getQRCode(qrText);
+
             if (template.copyLayout === 'single-copy') {
-                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 77.5, type === 'farmer' ? 'FARMER COPY' : 'BUYER COPY', template);
+                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 77.5, isFarmer ? 'FARMER COPY' : 'BUYER COPY', qrImage, template);
             } else {
-                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 3, type === 'farmer' ? 'FARMER COPY' : 'BUYER COPY', template);
+                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 3, isFarmer ? 'FARMER COPY' : 'BUYER COPY', qrImage, template);
+                doc.setLineWidth(0.2);
+                doc.setDrawColor(150);
                 doc.setLineDashPattern([2, 2], 0);
-                doc.line(148.5, 8, 148.5, 202);
+                doc.line(148.5, 5, 148.5, 205);
                 doc.setLineDashPattern([], 0);
-                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 152, 'SHOP COPY', template);
+                doc.setDrawColor(0);
+                this.drawPaymentVoucherCopy(doc, payment, source, type, biz, account, 152, 'SHOP COPY', qrImage, template);
             }
 
-            const filePrefix = type === 'farmer' ? 'Farmer_Payment' : 'Buyer_Receipt';
+            const filePrefix = isFarmer ? 'Farmer_Payment' : 'Buyer_Receipt';
             doc.save(`${filePrefix}_${payment.receiptNo || payment.id}.pdf`);
             Utils.hideLoading();
             Utils.showToast('Payment voucher PDF generated!');
@@ -814,7 +823,7 @@ const ReceiptPDF = {
         }
     },
 
-    drawPaymentVoucherCopy(doc, payment, source, type, biz, account, startX, copyLabel, template = {}) {
+    drawPaymentVoucherCopy(doc, payment, source, type, biz, account, startX, copyLabel, qrImage, template = {}) {
         const W = 142, M = 7;
         const lx = startX + M, rx = startX + W - M, cx = startX + W / 2;
         let y = 12;
@@ -856,10 +865,10 @@ const ReceiptPDF = {
         if (payment.netCashAmount !== undefined && payment.netCashAmount !== null) y = this.drawInfoRow(doc, lx, rx, y, 'Cash/Bank movement:', 'PKR ' + Utils.formatPKR(payment.netCashAmount), false);
         if (allocations.length > 1) {
             y = this.drawInfoRow(doc, lx, rx, y, 'Invoice allocations:', `${allocations.length} invoices`, true);
-            const visibleAllocations = allocations.slice(0, 5).map(a => [String(a.invoiceId || '-'), `PKR ${Utils.formatPKR(a.amount || 0)}`]);
-            if (allocations.length > 5) {
-                const remainder = allocations.slice(5).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-                visibleAllocations.push([`${allocations.length - 5} more invoices`, `PKR ${Utils.formatPKR(remainder)}`]);
+            const visibleAllocations = allocations.slice(0, 4).map(a => [String(a.invoiceId || '-'), `PKR ${Utils.formatPKR(a.amount || 0)}`]);
+            if (allocations.length > 4) {
+                const remainder = allocations.slice(4).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+                visibleAllocations.push([`${allocations.length - 4} more invoices`, `PKR ${Utils.formatPKR(remainder)}`]);
             }
             if (typeof doc.autoTable === 'function') {
                 doc.autoTable({ startY: y, margin: { left: lx, right: 148 - rx }, tableWidth: rx - lx,
@@ -870,36 +879,185 @@ const ReceiptPDF = {
                 y = doc.lastAutoTable.finalY + 2;
             }
         }
-        y += 3;
+        y += 2;
 
         doc.setFillColor(245, 245, 245);
-        doc.rect(lx, y, rx - lx, 29, 'F');
+        doc.rect(lx, y, rx - lx, 25, 'F');
         doc.setLineWidth(0.2);
-        doc.rect(lx, y, rx - lx, 29);
-        y += 7;
+        doc.rect(lx, y, rx - lx, 25);
+        y += 5;
         y = this.drawDataRow(doc, lx + 2, rx - 2, y, beforeLabel, 'PKR ' + Utils.formatPKR(payment.previousBalance || 0));
         const paidAmount = payment.totalPaidCash ?? payment.amount ?? 0;
         y = this.drawDataRow(doc, lx + 2, rx - 2, y, amountLabel, 'PKR ' + Utils.formatPKR(paidAmount), true);
         y = this.drawDataRow(doc, lx + 2, rx - 2, y, afterLabel, 'PKR ' + Utils.formatPKR(payment.newBalance || 0), true);
-        y += 8;
+        y += 7;
 
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(16);
+        doc.setFontSize(14);
         doc.text('PKR ' + Utils.formatPKR(paidAmount), cx, y, { align: 'center' });
-        y += 8;
+        y += 6;
 
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8);
-        const notes = payment.notes || 'No notes';
-        doc.text('Notes: ' + notes, lx, y, { maxWidth: rx - lx });
-        y += 18;
-
-        if (template.showSignatures !== false) {
-            this.drawSignatures(doc, lx, rx, 176, isFarmer ? 'Farmer Signature' : 'Buyer Signature', 'Authorized Signature');
+        if (payment.notes) {
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7.5);
+            doc.text('Notes: ' + payment.notes.substring(0, 75), lx, y, { maxWidth: rx - lx });
         }
-        doc.setFontSize(6);
-        doc.setTextColor(120);
-        doc.text((template.footerText || 'Auto-generated by AgriSys') + ' | ' + new Date().toLocaleString(), cx, 190, { align: 'center' });
+
+        // Signatures (Respects showSignatures template setting)
+        if (template.showSignatures !== false) {
+            this.drawSignatures(doc, lx, rx, 166, isFarmer ? 'Farmer Signature' : 'Buyer Signature', 'Authorized Signature');
+        }
+
+        // Footer Box (Respects showQR and footerText template settings)
+        const footerY = 175;
+        const footerH = 13;
+        doc.setDrawColor(180);
+        doc.setLineWidth(0.2);
+        doc.rect(lx, footerY, rx - lx, footerH, 'S');
+        doc.setDrawColor(0);
+
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(5.5);
+        doc.setTextColor(100);
+        doc.text('Voucher: ' + (payment.receiptNo || payment.id) + '  |  Mode: ' + (payment.mode || 'CASH').toUpperCase() + (account ? '  |  ' + account.name : ''), lx + 2, footerY + 4);
+        doc.text('Generated: ' + new Date().toLocaleString(), lx + 2, footerY + 8);
+        if (payment.notes) {
+            doc.text('Notes: ' + payment.notes.substring(0, 60), lx + 2, footerY + 11.5);
+        }
+
+        if (qrImage) {
+            doc.addImage(qrImage, 'PNG', rx - 14, footerY + 1, footerH - 2, footerH - 2);
+        }
+
         doc.setTextColor(0);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.text(template.footerText || biz.bizName || 'AGRISYS', cx, footerY + footerH + 3, { align: 'center' });
+    },
+
+    // =================== COMPANY DEBT / LOAN VOUCHER ===================
+    async generateDebtVoucher(tx) {
+        if (!Utils.requirePDF()) return;
+        try {
+            Utils.showLoading('Generating Loan Voucher...');
+            const biz = await Settings.getBusiness();
+            const template = await Settings.getReceiptTemplate();
+            const account = tx.accountId ? await DB.get('capital_accounts', tx.accountId) : null;
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+            const typeTitle = tx.type === 'given' ? 'Loan Issued' : 'Repayment Received';
+            const qrText = `AgriSys Company Loan\nRef: DEBT-${String(tx.id).slice(-6).toUpperCase()}\nDate: ${tx.date}\nParty: ${tx.personName || '-'}\nType: ${typeTitle}\nAmount: PKR ${tx.amount}`;
+            const qrImage = template.showQR === false ? null : await this.getQRCode(qrText);
+
+            if (template.copyLayout === 'single-copy') {
+                this.drawDebtVoucherCopy(doc, tx, biz, account, 77.5, tx.type === 'given' ? 'BORROWER COPY' : 'PAYER COPY', qrImage, template);
+            } else {
+                this.drawDebtVoucherCopy(doc, tx, biz, account, 3, tx.type === 'given' ? 'BORROWER COPY' : 'PAYER COPY', qrImage, template);
+                doc.setLineWidth(0.2);
+                doc.setDrawColor(150);
+                doc.setLineDashPattern([2, 2], 0);
+                doc.line(148.5, 5, 148.5, 205);
+                doc.setLineDashPattern([], 0);
+                doc.setDrawColor(0);
+                this.drawDebtVoucherCopy(doc, tx, biz, account, 152, 'OFFICE COPY', qrImage, template);
+            }
+
+            doc.save(`Voucher_${tx.type === 'given' ? 'Loan' : 'Recovery'}_${tx.personName}_${Utils.todayISO()}.pdf`);
+            Utils.hideLoading();
+            Utils.showToast('Loan voucher PDF generated!');
+        } catch (err) {
+            Utils.hideLoading();
+            console.error('Debt voucher PDF error:', err);
+            Utils.showToast('PDF error: ' + err.message, 'error');
+        }
+    },
+
+    drawDebtVoucherCopy(doc, tx, biz, account, startX, copyLabel, qrImage, template = {}) {
+        const W = 142, M = 7;
+        const lx = startX + M, rx = startX + W - M, cx = startX + W / 2;
+        let y = 12;
+        const isGiven = tx.type === 'given';
+        const title = isGiven ? 'LOAN ISSUANCE VOUCHER' : 'LOAN REPAYMENT RECEIPT';
+        const amountLabel = isGiven ? 'Loan Amount Issued' : 'Repayment Amount Received';
+
+        doc.setDrawColor(0);
+        doc.setTextColor(0);
+        doc.setLineWidth(0.35);
+        doc.rect(startX, 8, W, 186);
+
+        y = this.drawHeader(doc, biz, cx, lx, rx, y, template);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text(title, cx, y + 3, { align: 'center' });
+        y += 8;
+        doc.setFontSize(7);
+        doc.text(copyLabel, rx, y, { align: 'right' });
+        y += 4;
+
+        y = this.drawInfoRow(doc, lx, rx, y, 'Voucher Ref:', `DEBT-${String(tx.id).slice(-6).toUpperCase()}`, true);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Party Name:', tx.personName || '-', true);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Transaction:', isGiven ? 'Loan Issued (Company Outflow)' : 'Loan Repayment (Company Inflow)', false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Date:', Utils.formatDate(tx.date), false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Account:', account ? account.name : 'Cash / Unlinked', false);
+        y = this.drawInfoRow(doc, lx, rx, y, 'Category:', 'Interest-Free Company Loan', false);
+        y += 3;
+
+        // Highlighted Amount Card
+        doc.setFillColor(245, 245, 245);
+        doc.rect(lx, y, rx - lx, 25, 'F');
+        doc.setLineWidth(0.2);
+        doc.rect(lx, y, rx - lx, 25);
+        y += 6;
+        y = this.drawDataRow(doc, lx + 2, rx - 2, y, amountLabel, 'PKR ' + Utils.formatPKR(tx.amount || 0), true);
+        y += 4;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.text('PKR ' + Utils.formatPKR(tx.amount || 0), cx, y, { align: 'center' });
+        y += 6;
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(6.5);
+        doc.setTextColor(100);
+        doc.text('* Interest-free company transaction. No finance charges or interest apply.', cx, y, { align: 'center' });
+        doc.setTextColor(0);
+        y += 6;
+
+        if (tx.notes) {
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7.5);
+            doc.text('Notes: ' + tx.notes.substring(0, 75), lx, y, { maxWidth: rx - lx });
+        }
+
+        // Signatures (Respects showSignatures template setting)
+        if (template.showSignatures !== false) {
+            this.drawSignatures(doc, lx, rx, 166, isGiven ? 'Borrower Signature' : 'Payer Signature', 'Authorized Signature');
+        }
+
+        // Footer Box (Respects showQR and footerText template settings)
+        const footerY = 175;
+        const footerH = 13;
+        doc.setDrawColor(180);
+        doc.setLineWidth(0.2);
+        doc.rect(lx, footerY, rx - lx, footerH, 'S');
+        doc.setDrawColor(0);
+
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(5.5);
+        doc.setTextColor(100);
+        doc.text('Ref: DEBT-' + String(tx.id).slice(-6).toUpperCase() + '  |  ' + (isGiven ? 'Loan Outflow' : 'Repayment Inflow') + (account ? '  |  ' + account.name : ''), lx + 2, footerY + 4);
+        doc.text('Generated: ' + new Date().toLocaleString(), lx + 2, footerY + 8);
+        if (tx.notes) {
+            doc.text('Notes: ' + tx.notes.substring(0, 60), lx + 2, footerY + 11.5);
+        }
+
+        if (qrImage) {
+            doc.addImage(qrImage, 'PNG', rx - 14, footerY + 1, footerH - 2, footerH - 2);
+        }
+
+        doc.setTextColor(0);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.text(template.footerText || biz.bizName || 'AGRISYS', cx, footerY + footerH + 3, { align: 'center' });
     }
 };

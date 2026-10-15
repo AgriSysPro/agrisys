@@ -392,73 +392,7 @@ const DebtsMgmt = {
         if (!Utils.requirePDF()) return;
         const tx = await DB.get('company_debts', id);
         if (!tx) { Utils.showToast('Transaction not found', 'error'); return; }
-        
-        const biz = await Settings.getBusiness();
-
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF('p', 'mm', 'a5');
-        const pw = 148; // A5 width in mm
-        const mx = 12;
-        let y = 15;
-        const title = tx.type === 'given' ? 'LOAN ISSUANCE VOUCHER' : 'LOAN REPAYMENT RECEIPT (INFLOW)';
-        y = ReceiptPDF.drawReportHeader(doc, biz, title, { marginX: mx });
-
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(9);
-        doc.text(`Voucher Ref: DEBT-${tx.id.toString().slice(-6).toUpperCase()}`, mx, y);
-        doc.text(`Date: ${Utils.formatDate(tx.date)}`, pw - mx, y, { align: 'right' });
-        y += 8;
-
-        doc.setFillColor(240, 243, 246);
-        doc.rect(mx, y, pw - mx * 2, 28, 'F');
-        y += 6;
-        doc.setFont('helvetica', 'bold');
-        doc.text('Party / Borrower:', mx + 4, y);
-        doc.setFont('helvetica', 'normal');
-        doc.text(tx.personName, mx + 40, y);
-        y += 7;
-        
-        doc.setFont('helvetica', 'bold');
-        doc.text('Transaction Type:', mx + 4, y);
-        doc.setFont('helvetica', 'normal');
-        doc.text(tx.type === 'given' ? 'Loan Issued (Outflow)' : 'Repayment Received (Inflow)', mx + 40, y);
-        y += 7;
-
-        doc.setFont('helvetica', 'bold');
-        doc.text('Amount (PKR):', mx + 4, y);
-        doc.setFontSize(11);
-        doc.text(`PKR ${Utils.formatPKR(tx.amount)}`, mx + 40, y);
-        doc.setFontSize(9);
-        y += 12;
-
-        if (tx.notes) {
-            doc.setFont('helvetica', 'bold');
-            doc.text('Notes / Memo:', mx, y);
-            doc.setFont('helvetica', 'normal');
-            doc.text(tx.notes, mx + 25, y);
-            y += 10;
-        }
-
-        y += 5;
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'italic');
-        doc.text('Note: This transaction is recorded as an interest-free company loan.', pw / 2, y, { align: 'center' });
-        y += 4;
-        doc.text('No interest, finance charges, or late penalties apply.', pw / 2, y, { align: 'center' });
-        y += 15;
-
-        doc.setFont('helvetica', 'normal');
-        doc.setLineWidth(0.2);
-        doc.line(mx, y, mx + 40, y);
-        doc.line(pw - mx - 40, y, pw - mx, y);
-        y += 4;
-        doc.text('Prepared By / Stamp', mx, y);
-        doc.text('Receiver Signature', pw - mx - 40, y);
-
-        ReceiptPDF.drawReportFooter(doc);
-
-        doc.save(`Voucher_${tx.type === 'given' ? 'Loan' : 'Recovery'}_${tx.personName}_${Utils.todayISO()}.pdf`);
-        Utils.showToast('PDF voucher generated successfully!');
+        await ReceiptPDF.generateDebtVoucher(tx);
     },
 
     // ── Excel Export ──
