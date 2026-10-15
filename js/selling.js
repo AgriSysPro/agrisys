@@ -7,6 +7,10 @@ const Selling = {
     async init() {
         document.getElementById('s-date').value = Utils.todayISO();
         document.getElementById('s-id').value = await Utils.getNextReceiptId('sale');
+        const defs = await Settings.getDefaults();
+        if (document.getElementById('s-per-bag')) {
+            document.getElementById('s-per-bag').value = defs.perBagWeight ?? 100;
+        }
         await Utils.populateCapitalAccountSelect('s-initial-account', 'Select cash/bank account');
         await this.loadBuyerDatalist();
     },
@@ -363,6 +367,10 @@ const Selling = {
         document.getElementById('s-payment-status').value = 'pending';
         document.getElementById('s-notes').value = '';
         document.getElementById('s-due-date').value = '';
+        const defs = await Settings.getDefaults();
+        if (document.getElementById('s-per-bag')) {
+            document.getElementById('s-per-bag').value = defs.perBagWeight ?? 100;
+        }
         this.renderDeductions();
         this.removeImage();
         this.calculate();

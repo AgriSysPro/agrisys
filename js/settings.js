@@ -40,11 +40,21 @@ const Settings = {
             document.getElementById('set-expense-types').value = this.defaults.expenseTypes;
         }
         if (defs) {
-            document.getElementById('set-per-bag').value = defs.perBagWeight || 100;
-            document.getElementById('set-bardana').value = defs.defaultBardana || 1;
-            document.getElementById('set-labour').value = defs.defaultLabour || 0.5;
-            if (document.getElementById('set-commission')) document.getElementById('set-commission').value = defs.defaultCommission || 2.0;
-            if (document.getElementById('set-mandi-tax')) document.getElementById('set-mandi-tax').value = defs.defaultMandiTax || 1.0;
+            document.getElementById('set-per-bag').value = (defs.perBagWeight !== undefined && defs.perBagWeight !== null && defs.perBagWeight !== '') ? defs.perBagWeight : 100;
+            document.getElementById('set-bardana').value = (defs.defaultBardana !== undefined && defs.defaultBardana !== null && defs.defaultBardana !== '') ? defs.defaultBardana : 1;
+            document.getElementById('set-labour').value = (defs.defaultLabour !== undefined && defs.defaultLabour !== null && defs.defaultLabour !== '') ? defs.defaultLabour : 0.5;
+            if (document.getElementById('set-commission')) {
+                document.getElementById('set-commission').value = (defs.defaultCommission !== undefined && defs.defaultCommission !== null && defs.defaultCommission !== '') ? defs.defaultCommission : 2.0;
+            }
+            if (document.getElementById('set-mandi-tax')) {
+                document.getElementById('set-mandi-tax').value = (defs.defaultMandiTax !== undefined && defs.defaultMandiTax !== null && defs.defaultMandiTax !== '') ? defs.defaultMandiTax : 1.0;
+            }
+        } else {
+            document.getElementById('set-per-bag').value = this.defaults.perBagWeight;
+            document.getElementById('set-bardana').value = this.defaults.defaultBardana;
+            document.getElementById('set-labour').value = this.defaults.defaultLabour;
+            if (document.getElementById('set-commission')) document.getElementById('set-commission').value = this.defaults.defaultCommission;
+            if (document.getElementById('set-mandi-tax')) document.getElementById('set-mandi-tax').value = this.defaults.defaultMandiTax;
         }
         const footer = document.getElementById('set-receipt-footer');
         if (footer) {
@@ -64,7 +74,22 @@ const Settings = {
 
     async getDefaults() {
         const defs = await DB.getSetting('defaults');
-        return defs || { perBagWeight: 100, defaultBardana: 1, defaultLabour: 0.5, defaultCommission: 2.0, defaultMandiTax: 1.0 };
+        if (!defs) {
+            return {
+                perBagWeight: this.defaults.perBagWeight,
+                defaultBardana: this.defaults.defaultBardana,
+                defaultLabour: this.defaults.defaultLabour,
+                defaultCommission: this.defaults.defaultCommission,
+                defaultMandiTax: this.defaults.defaultMandiTax
+            };
+        }
+        return {
+            perBagWeight: (defs.perBagWeight !== undefined && defs.perBagWeight !== null) ? defs.perBagWeight : this.defaults.perBagWeight,
+            defaultBardana: (defs.defaultBardana !== undefined && defs.defaultBardana !== null) ? defs.defaultBardana : this.defaults.defaultBardana,
+            defaultLabour: (defs.defaultLabour !== undefined && defs.defaultLabour !== null) ? defs.defaultLabour : this.defaults.defaultLabour,
+            defaultCommission: (defs.defaultCommission !== undefined && defs.defaultCommission !== null) ? defs.defaultCommission : this.defaults.defaultCommission,
+            defaultMandiTax: (defs.defaultMandiTax !== undefined && defs.defaultMandiTax !== null) ? defs.defaultMandiTax : this.defaults.defaultMandiTax
+        };
     },
 
     async getReceiptTemplate() {
@@ -95,37 +120,57 @@ const Settings = {
         };
         await DB.setSetting('business', data);
         
+        // Also save defaults and receipt template if their inputs are present on the page
+        if (document.getElementById('set-per-bag')) {
+            await this.saveDefaults(true);
+        }
+        if (document.getElementById('set-receipt-footer')) {
+            await this.saveReceiptTemplate(true);
+        }
+
         // Update sidebar branding
         document.getElementById('sidebar-biz-name').textContent = data.bizName || 'AgriSys';
         
-        Utils.showToast('Business settings saved!');
+        Utils.showToast('Settings saved!');
         App.populateCropSelects();
         App.populateExpenseTypeSelect();
     },
 
-    async saveDefaults() {
+    async saveDefaults(silent = false) {
+        const perBagEl = document.getElementById('set-per-bag');
+        const bardanaEl = document.getElementById('set-bardana');
+        const labourEl = document.getElementById('set-labour');
+        const commEl = document.getElementById('set-commission');
+        const mandiTaxEl = document.getElementById('set-mandi-tax');
+
         const data = {
-            perBagWeight: Utils.pf(document.getElementById('set-per-bag').value),
-            defaultBardana: Utils.pf(document.getElementById('set-bardana').value),
-            defaultLabour: Utils.pf(document.getElementById('set-labour').value),
-            defaultCommission: Utils.pf(document.getElementById('set-commission') ? document.getElementById('set-commission').value : 2.0),
-            defaultMandiTax: Utils.pf(document.getElementById('set-mandi-tax') ? document.getElementById('set-mandi-tax').value : 1.0)
+            perBagWeight: perBagEl ? Utils.pf(perBagEl.value) : this.defaults.perBagWeight,
+            defaultBardana: bardanaEl ? Utils.pf(bardanaEl.value) : this.defaults.defaultBardana,
+            defaultLabour: labourEl ? Utils.pf(labourEl.value) : this.defaults.defaultLabour,
+            defaultCommission: commEl ? Utils.pf(commEl.value) : this.defaults.defaultCommission,
+            defaultMandiTax: mandiTaxEl ? Utils.pf(mandiTaxEl.value) : this.defaults.defaultMandiTax
         };
         await DB.setSetting('defaults', data);
-        Utils.showToast('Default values saved!');
+        if (!silent) {
+            Utils.showToast('Default values saved!');
+        }
     },
 
-    async saveReceiptTemplate() {
+    async saveReceiptTemplate(silent = false) {
+        const footer = document.getElementById('set-receipt-footer');
+        if (!footer) return;
         const data = {
-            footerText: document.getElementById('set-receipt-footer').value.trim() || this.defaults.receiptTemplate.footerText,
-            copyLayout: document.getElementById('set-receipt-layout').value || 'two-copy',
-            showQR: document.getElementById('set-receipt-qr').checked,
-            showSignatures: document.getElementById('set-receipt-signatures').checked,
-            showOwner: document.getElementById('set-receipt-owner').checked
+            footerText: footer.value.trim() || this.defaults.receiptTemplate.footerText,
+            copyLayout: document.getElementById('set-receipt-layout') ? document.getElementById('set-receipt-layout').value : 'two-copy',
+            showQR: document.getElementById('set-receipt-qr') ? document.getElementById('set-receipt-qr').checked : true,
+            showSignatures: document.getElementById('set-receipt-signatures') ? document.getElementById('set-receipt-signatures').checked : true,
+            showOwner: document.getElementById('set-receipt-owner') ? document.getElementById('set-receipt-owner').checked : true
         };
         await DB.setSetting('receiptTemplate', data);
         await Utils.audit('update', 'settings', 'receiptTemplate', { type: 'receipt_template' });
-        Utils.showToast('Receipt template saved!');
+        if (!silent) {
+            Utils.showToast('Receipt template saved!');
+        }
     },
 
     async renderAudit() {

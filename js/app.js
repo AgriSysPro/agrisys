@@ -151,6 +151,7 @@ const App = {
             }
             case 'aging-reports': await AgingReports.render(); break;
             case 'settings':
+                await Settings.init();
                 if (typeof SeasonManager !== 'undefined') await SeasonManager.renderSettings();
                 await Settings.renderAudit();
                 if (typeof BackupManager !== 'undefined') await BackupManager.renderVaultUI();

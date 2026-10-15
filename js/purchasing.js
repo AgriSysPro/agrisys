@@ -9,10 +9,16 @@ const Purchasing = {
         document.getElementById('p-date').value = Utils.todayISO();
         document.getElementById('p-id').value = await Utils.getNextReceiptId('purchase');
         const defs = await Settings.getDefaults();
-        document.getElementById('p-per-bag-weight').value = defs.perBagWeight || 100;
-        document.getElementById('p-weight-per-bag').value = defs.perBagWeight || 100;
-        document.getElementById('p-bardana').value = defs.defaultBardana || 0;
-        document.getElementById('p-labour').value = defs.defaultLabour || 0;
+        document.getElementById('p-per-bag-weight').value = defs.perBagWeight ?? 100;
+        document.getElementById('p-weight-per-bag').value = defs.perBagWeight ?? 100;
+        document.getElementById('p-bardana').value = defs.defaultBardana ?? 0;
+        document.getElementById('p-labour').value = defs.defaultLabour ?? 0;
+        if (document.getElementById('p-commission')) {
+            document.getElementById('p-commission').value = defs.defaultCommission ?? 2.0;
+        }
+        if (document.getElementById('p-mandi-tax')) {
+            document.getElementById('p-mandi-tax').value = defs.defaultMandiTax ?? 1.0;
+        }
         await Utils.populateCapitalAccountSelect('p-initial-account', 'Select cash/bank account');
         await this.loadFarmerDatalist();
     },
@@ -515,10 +521,16 @@ const Purchasing = {
         document.getElementById('p-deduct-advance').value = '0';
         document.getElementById('p-outstanding-adv').textContent = 'PKR 0.00';
         const defs = await Settings.getDefaults();
-        document.getElementById('p-per-bag-weight').value = defs.perBagWeight || 100;
-        document.getElementById('p-weight-per-bag').value = defs.perBagWeight || 100;
-        document.getElementById('p-bardana').value = defs.defaultBardana || 0;
-        document.getElementById('p-labour').value = defs.defaultLabour || 0;
+        document.getElementById('p-per-bag-weight').value = defs.perBagWeight ?? 100;
+        document.getElementById('p-weight-per-bag').value = defs.perBagWeight ?? 100;
+        document.getElementById('p-bardana').value = defs.defaultBardana ?? 0;
+        document.getElementById('p-labour').value = defs.defaultLabour ?? 0;
+        if (document.getElementById('p-commission')) {
+            document.getElementById('p-commission').value = defs.defaultCommission ?? 2.0;
+        }
+        if (document.getElementById('p-mandi-tax')) {
+            document.getElementById('p-mandi-tax').value = defs.defaultMandiTax ?? 1.0;
+        }
         this.renderDeductions();
         this.removeScaleImage();
         this.setMethod('scale');

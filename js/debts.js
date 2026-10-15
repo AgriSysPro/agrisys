@@ -351,7 +351,8 @@ const DebtsMgmt = {
     async shareWhatsApp(id) {
         const tx = await DB.get('company_debts', id);
         if (!tx) { Utils.showToast('Transaction not found', 'error'); return; }
-        const bizName = await DB.getSetting('bizName') || 'AgriSys';
+        const biz = await Settings.getBusiness();
+        const bizName = biz.bizName || 'AgriSys';
         
         const typeTitle = tx.type === 'given' ? 'LOAN ISSUANCE VOUCHER' : 'DEBT REPAYMENT RECEIPT';
         let msg = `*${bizName} — ${typeTitle}*\n`;
@@ -373,7 +374,8 @@ const DebtsMgmt = {
         const person = summary.byPerson[personName.trim().toLowerCase()];
         if (!person) { Utils.showToast('Party details not found', 'error'); return; }
         
-        const bizName = await DB.getSetting('bizName') || 'AgriSys';
+        const biz = await Settings.getBusiness();
+        const bizName = biz.bizName || 'AgriSys';
         let msg = `*${bizName} — Loan Balance Reminder*\n\n`;
         msg += `Dear ${person.name},\n`;
         msg += `This is a reminder regarding your outstanding interest-free loan account balance:\n\n`;
@@ -391,21 +393,13 @@ const DebtsMgmt = {
         const tx = await DB.get('company_debts', id);
         if (!tx) { Utils.showToast('Transaction not found', 'error'); return; }
         
-        const bizName = await DB.getSetting('bizName') || 'AgriSys';
-        const address = await DB.getSetting('address') || '';
-        const phone = await DB.getSetting('phone') || '';
+        const biz = await Settings.getBusiness();
 
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF('p', 'mm', 'a5');
         const pw = 148; // A5 width in mm
         const mx = 12;
         let y = 15;
-
-        const biz = {
-            bizName: bizName,
-            address: address,
-            phone: phone
-        };
         const title = tx.type === 'given' ? 'LOAN ISSUANCE VOUCHER' : 'LOAN REPAYMENT RECEIPT (INFLOW)';
         y = ReceiptPDF.drawReportHeader(doc, biz, title, { marginX: mx });
 

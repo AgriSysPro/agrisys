@@ -597,12 +597,7 @@ const BankAccounts = {
         );
 
         // Build PDF
-        const biz = {
-            bizName: await DB.getSetting('bizName') || 'AgriSys',
-            address: await DB.getSetting('address') || '',
-            phone: await DB.getSetting('phone') || '',
-            ownerName: await DB.getSetting('ownerName') || ''
-        };
+        const biz = await Settings.getBusiness();
 
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF('p', 'mm', 'a4');
