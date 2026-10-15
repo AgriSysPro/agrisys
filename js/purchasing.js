@@ -46,6 +46,13 @@ const Purchasing = {
         document.getElementById('method-bags').classList.toggle('active', method === 'bags');
         document.getElementById('scale-fields').style.display = method === 'scale' ? '' : 'none';
         document.getElementById('bags-fields').style.display = method === 'bags' ? '' : 'none';
+        if (method === 'scale') {
+            const w = document.getElementById('p-weight-per-bag').value;
+            if (w) document.getElementById('p-per-bag-weight').value = w;
+        } else {
+            const w = document.getElementById('p-per-bag-weight').value;
+            if (w) document.getElementById('p-weight-per-bag').value = w;
+        }
         this.calculate();
     },
 

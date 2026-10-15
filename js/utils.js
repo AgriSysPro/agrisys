@@ -142,7 +142,9 @@ const Utils = {
     // Format number with 2 decimal places
     formatNum(num, decimals = 2) {
         if (num === null || num === undefined || isNaN(num)) return '0';
-        return parseFloat(num).toFixed(decimals);
+        let val = parseFloat(num);
+        if (Math.abs(val) < Math.pow(10, -decimals) / 2) val = 0;
+        return val.toFixed(decimals);
     },
 
     // ===== Integer-Scaled Financial Math Utilities =====

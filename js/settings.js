@@ -143,17 +143,24 @@ const Settings = {
         const commEl = document.getElementById('set-commission');
         const mandiTaxEl = document.getElementById('set-mandi-tax');
 
+        const perBagWeight = perBagEl ? Utils.pf(perBagEl.value) : this.defaults.perBagWeight;
+        if (perBagWeight <= 0) {
+            Utils.showToast('Default bag weight must be greater than 0 KG', 'error');
+            return false;
+        }
+
         const data = {
-            perBagWeight: perBagEl ? Utils.pf(perBagEl.value) : this.defaults.perBagWeight,
-            defaultBardana: bardanaEl ? Utils.pf(bardanaEl.value) : this.defaults.defaultBardana,
-            defaultLabour: labourEl ? Utils.pf(labourEl.value) : this.defaults.defaultLabour,
-            defaultCommission: commEl ? Utils.pf(commEl.value) : this.defaults.defaultCommission,
-            defaultMandiTax: mandiTaxEl ? Utils.pf(mandiTaxEl.value) : this.defaults.defaultMandiTax
+            perBagWeight,
+            defaultBardana: bardanaEl ? Math.max(0, Utils.pf(bardanaEl.value)) : this.defaults.defaultBardana,
+            defaultLabour: labourEl ? Math.max(0, Utils.pf(labourEl.value)) : this.defaults.defaultLabour,
+            defaultCommission: commEl ? Math.max(0, Math.min(100, Utils.pf(commEl.value))) : this.defaults.defaultCommission,
+            defaultMandiTax: mandiTaxEl ? Math.max(0, Math.min(100, Utils.pf(mandiTaxEl.value))) : this.defaults.defaultMandiTax
         };
         await DB.setSetting('defaults', data);
         if (!silent) {
             Utils.showToast('Default values saved!');
         }
+        return true;
     },
 
     async saveReceiptTemplate(silent = false) {

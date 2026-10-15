@@ -938,11 +938,11 @@
             <div class="card" style="margin-bottom:20px">
                 <div class="card-header"><h3 class="card-title">Default Values</h3></div>
                 <div class="form-grid">
-                    <div class="form-group"><label class="form-label">Default Per Bag Weight (KG)</label><input class="form-input" type="number" id="set-per-bag" step="any" value="100"></div>
-                    <div class="form-group"><label class="form-label">Default Bardana (KG/Bag)</label><input class="form-input" type="number" id="set-bardana" step="any" value="1"></div>
-                    <div class="form-group"><label class="form-label">Default Labour (KG/Bag)</label><input class="form-input" type="number" id="set-labour" step="any" value="0.5"></div>
-                    <div class="form-group"><label class="form-label">Default Commission Rate (%)</label><input class="form-input" type="number" id="set-commission" step="0.1" value="2.0"></div>
-                    <div class="form-group"><label class="form-label">Default Mandi Tax Rate (%)</label><input class="form-input" type="number" id="set-mandi-tax" step="0.1" value="1.0"></div>
+                    <div class="form-group"><label class="form-label">Default Per Bag Weight (KG)</label><input class="form-input" type="number" id="set-per-bag" step="any" min="1" value="100"></div>
+                    <div class="form-group"><label class="form-label">Default Bardana (KG/Bag)</label><input class="form-input" type="number" id="set-bardana" step="any" min="0" value="1"></div>
+                    <div class="form-group"><label class="form-label">Default Labour (KG/Bag)</label><input class="form-input" type="number" id="set-labour" step="any" min="0" value="0.5"></div>
+                    <div class="form-group"><label class="form-label">Default Commission Rate (%)</label><input class="form-input" type="number" id="set-commission" step="0.1" min="0" max="100" value="2.0"></div>
+                    <div class="form-group"><label class="form-label">Default Mandi Tax Rate (%)</label><input class="form-input" type="number" id="set-mandi-tax" step="0.1" min="0" max="100" value="1.0"></div>
                 </div>
                 <button class="btn btn-primary" style="margin-top:16px" onclick="Settings.saveDefaults()"><i data-lucide="save"></i> Save Defaults</button>
             </div>
