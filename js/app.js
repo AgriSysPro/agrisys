@@ -121,6 +121,7 @@ const App = {
             case 'farmers': await Farmers.render(); break;
             case 'purchase-payments': await PurchasePayments.render(); break;
             case 'sale-list': await SaleList.render(); break;
+            case 'receipt-gallery': await ReceiptGallery.render(); break;
             case 'sale-payments': await SalePayments.render(); break;
             case 'buyers': await Buyers.render(); break;
             case 'expenses': await Expenses.render(); break;

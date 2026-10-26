@@ -61,6 +61,11 @@
                 <i data-lucide="banknote"></i> Buyer Payments
             </div>
 
+            <div class="nav-section-label">Documents</div>
+            <div class="nav-item" data-section="receipt-gallery" onclick="App.navigate('receipt-gallery')">
+                <i data-lucide="images"></i> Receipt Gallery
+            </div>
+
             <div class="nav-section-label">Finance</div>
             <div class="nav-item" data-section="expenses" onclick="App.navigate('expenses')">
                 <i data-lucide="receipt"></i> Expenses
@@ -471,6 +476,44 @@
                     <thead><tr><th>Voucher</th><th>Date</th><th>Buyer</th><th>Sale #</th><th>Mode</th><th class="text-right">Amount Received</th><th>Account</th><th>Actions</th></tr></thead>
                     <tbody id="sp-history-tbody"></tbody>
                 </table></div>
+            </div>
+        </div>
+
+        <!-- ===== RECEIPT GALLERY ===== -->
+        <div class="section" id="sec-receipt-gallery">
+            <div class="page-header">
+                <div><h1 class="page-title">Receipt Gallery</h1><p class="page-title-sub">Purchase kanda slips and sale receipt images, together in one place.</p></div>
+                <div class="page-actions"><button class="btn btn-ghost" onclick="ReceiptGallery.render()"><i data-lucide="refresh-cw"></i> Refresh</button></div>
+            </div>
+            <div class="card rg-controls">
+                <div class="rg-filters">
+                    <div class="form-group rg-search-field"><label class="form-label" for="rg-search">Search receipts</label><input class="form-input" id="rg-search" type="search" placeholder="Receipt number, farmer, buyer or crop" oninput="ReceiptGallery.applyFilters()"></div>
+                    <div class="form-group"><label class="form-label" for="rg-type">Receipt type</label><select class="form-select" id="rg-type" onchange="ReceiptGallery.applyFilters()"><option value="">Purchases &amp; sales</option><option value="purchase">Purchases</option><option value="sale">Sales</option></select></div>
+                    <div class="form-group"><label class="form-label" for="rg-from">From</label><input class="form-input" id="rg-from" type="date" onchange="ReceiptGallery.applyFilters()"></div>
+                    <div class="form-group"><label class="form-label" for="rg-to">To</label><input class="form-input" id="rg-to" type="date" onchange="ReceiptGallery.applyFilters()"></div>
+                    <button class="btn btn-ghost" onclick="ReceiptGallery.resetFilters()">Reset filters</button>
+                </div>
+                <p class="rg-help">Includes saved uploads from all seasons. Add or replace an image by editing its purchase or sale record.</p>
+                <div class="rg-toolbar">
+                    <div class="rg-selection-actions">
+                        <button class="btn btn-sm btn-ghost" id="rg-select-filtered" onclick="ReceiptGallery.selectFiltered()">Select all matching</button>
+                        <button class="btn btn-sm btn-ghost" id="rg-clear" onclick="ReceiptGallery.clearSelection()" disabled>Clear selection</button>
+                        <span id="rg-selection" role="status" aria-live="polite">0 selected</span>
+                    </div>
+                    <div class="rg-export-actions">
+                        <label class="form-label" for="rg-pdf-layout">PDF contents</label>
+                        <select class="form-select" id="rg-pdf-layout"><option value="paired">Computerized receipt + uploaded slip</option><option value="images">Uploaded images only</option></select>
+                        <button class="btn btn-primary" id="rg-export" onclick="ReceiptGallery.exportSelected()" disabled><i data-lucide="download"></i> Download selected PDF</button>
+                    </div>
+                </div>
+            </div>
+            <p class="rg-results" id="rg-results" role="status"></p>
+            <div class="rg-grid" id="rg-grid"></div>
+            <div class="card rg-empty" id="rg-empty" hidden></div>
+            <div class="rg-pagination">
+                <button class="btn btn-sm btn-ghost" id="rg-prev" onclick="ReceiptGallery.changePage(-1)" disabled>Previous</button>
+                <span id="rg-page">Page 1 of 1</span>
+                <button class="btn btn-sm btn-ghost" id="rg-next" onclick="ReceiptGallery.changePage(1)" disabled>Next</button>
             </div>
         </div>
 
@@ -1587,6 +1630,14 @@
     </div>
 </div>
 
+<div class="modal-overlay" id="rg-preview-modal" role="dialog" aria-modal="true" aria-labelledby="rg-preview-title">
+    <div class="modal rg-preview">
+        <div class="modal-header"><h3 class="modal-title" id="rg-preview-title">Receipt image</h3><button class="modal-close" aria-label="Close receipt preview" onclick="Utils.hideModal('rg-preview-modal')">×</button></div>
+        <div class="modal-body"><img id="rg-preview-image" alt="Receipt image"><p id="rg-preview-error" hidden>This image cannot be opened. Replace the upload in the original purchase or sale record.</p></div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('rg-preview-modal')">Close</button></div>
+    </div>
+</div>
+
 <!-- Scripts -->
 <script src="js/utils.js"></script>
 <script src="js/db.js"></script>
@@ -1612,6 +1663,7 @@
 <script src="js/crop-analysis.js"></script>
 <script src="js/backup-manager.js"></script>
 <script src="js/CoreServices.js"></script>
+<script src="js/receipt-gallery.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
