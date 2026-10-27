@@ -1644,28 +1644,41 @@
     <div class="modal modal-xl cr-modal">
         <div class="modal-header"><h3 class="modal-title" id="cr-title">Combine receipts</h3><button class="modal-close" aria-label="Close combined receipts" onclick="Utils.hideModal('combined-receipts-modal')">×</button></div>
         <div class="modal-body">
-            <p class="cr-help">Select receipts for one party to create a combined PDF with individual amounts and a grand total. Original transactions remain unchanged.</p>
             <fieldset id="cr-fields">
-                <div class="cr-filters">
-                    <div class="form-group cr-party-field"><label class="form-label" for="cr-party" id="cr-party-label">Farmer</label><select class="form-select" id="cr-party" onchange="CombinedReceipts.filtersChanged()"><option value="">Choose a farmer</option></select></div>
-                    <div class="form-group"><label class="form-label" for="cr-from">Receipt date from</label><input class="form-input" id="cr-from" type="date" onchange="CombinedReceipts.filtersChanged()"></div>
-                    <div class="form-group"><label class="form-label" for="cr-to">Receipt date to</label><input class="form-input" id="cr-to" type="date" onchange="CombinedReceipts.filtersChanged()"></div>
-                    <button class="btn btn-ghost" type="button" onclick="CombinedReceipts.allDates()">All dates</button>
-                    <div class="form-group cr-search-field"><label class="form-label" for="cr-search">Find receipt or crop</label><input class="form-input" id="cr-search" type="search" placeholder="Receipt number or crop" oninput="CombinedReceipts.filtersChanged()"></div>
+                <div class="cr-intro">
+                    <p>Build one clear PDF for a single farmer or buyer. Choose the receipts to include, then review the totals before downloading.</p>
+                    <span><i data-lucide="files"></i> One party per PDF</span>
                 </div>
-                <p class="cr-help" id="cr-scope"></p>
-                <div class="cr-toolbar">
-                    <button class="btn btn-sm btn-ghost" type="button" id="cr-select-all" onclick="CombinedReceipts.selectAll()">Select all matching</button>
-                    <button class="btn btn-sm btn-ghost" type="button" id="cr-clear" onclick="CombinedReceipts.clearSelection()" disabled>Clear selection</button>
-                    <span id="cr-selected" role="status" aria-live="polite">0 selected</span>
+                <section class="cr-filter-card" aria-labelledby="cr-step-one">
+                    <div class="cr-step-heading"><span class="cr-step-number">1</span><div><h4 id="cr-step-one">Choose receipts</h4><p>All dates for this party are available; the active season is selected by default.</p></div></div>
+                    <div class="cr-filters">
+                        <div class="form-group cr-party-field"><label class="form-label" for="cr-party" id="cr-party-label">Farmer</label><select class="form-select" id="cr-party" onchange="CombinedReceipts.filtersChanged()"><option value="">Choose a farmer</option></select></div>
+                        <div class="cr-date-group"><div class="form-group"><label class="form-label" for="cr-from">From date</label><input class="form-input" id="cr-from" type="date" onchange="CombinedReceipts.filtersChanged()"></div><span class="cr-date-separator" aria-hidden="true">to</span><div class="form-group"><label class="form-label" for="cr-to">To date</label><input class="form-input" id="cr-to" type="date" onchange="CombinedReceipts.filtersChanged()"></div></div>
+                        <button class="btn btn-ghost cr-all-dates" type="button" onclick="CombinedReceipts.allDates()">All dates</button>
+                        <div class="form-group cr-search-field"><label class="form-label" for="cr-search">Search by receipt or crop</label><div class="cr-search-box"><i data-lucide="search" aria-hidden="true"></i><input class="form-input" id="cr-search" type="search" placeholder="Enter a receipt number or crop" oninput="CombinedReceipts.filtersChanged()"></div></div>
+                    </div>
+                    <p class="cr-scope" id="cr-scope"><i data-lucide="calendar-days" aria-hidden="true"></i><span></span></p>
                 </div>
-                <p class="cr-help">Changing the party, dates or search clears the selection. Paid/received figures include all recorded settlements and advance adjustments.</p>
-                <div class="table-container cr-table-scroll"><table class="data-table">
-                    <thead><tr><th>Select</th><th>Receipt no.</th><th>Date</th><th>Crop</th><th class="text-right">Net KG</th><th class="text-right">Rate / maund</th><th class="text-right">Amount (PKR)</th><th class="text-right" id="cr-settled-heading">Paid / adjusted (PKR)</th><th class="text-right">Balance (PKR)</th></tr></thead>
-                    <tbody id="cr-tbody"></tbody><tfoot id="cr-totals"></tfoot>
-                </table></div>
-                <p class="cr-empty" id="cr-empty">Choose a farmer or buyer to view their receipts.</p>
-                <div class="cr-pagination"><button class="btn btn-sm btn-ghost" type="button" id="cr-prev" onclick="CombinedReceipts.changePage(-1)" disabled>Previous</button><span id="cr-page"></span><button class="btn btn-sm btn-ghost" type="button" id="cr-next" onclick="CombinedReceipts.changePage(1)" disabled>Next</button></div>
+                <section class="cr-receipt-panel" aria-labelledby="cr-step-two">
+                    <div class="cr-receipt-heading"><div class="cr-step-heading"><span class="cr-step-number">2</span><div><h4 id="cr-step-two">Review and select</h4><p>Amounts include recorded payments and advance adjustments.</p></div></div><span class="cr-selection-count" id="cr-selected" role="status" aria-live="polite">0 selected</span></div>
+                    <div class="cr-toolbar"><div class="cr-toolbar-actions"><button class="btn btn-sm btn-ghost" type="button" id="cr-select-all" onclick="CombinedReceipts.selectAll()"><i data-lucide="list-checks"></i> Select all matching</button><button class="btn btn-sm btn-ghost" type="button" id="cr-clear" onclick="CombinedReceipts.clearSelection()" disabled>Clear selection</button></div><span class="cr-filter-note">Changing filters clears selection</span></div>
+                    <div class="table-container cr-table-scroll"><table class="data-table">
+                        <thead><tr><th>Select</th><th>Receipt no.</th><th>Date</th><th>Crop</th><th class="text-right">Net KG</th><th class="text-right">Rate / maund</th><th class="text-right">Amount (PKR)</th><th class="text-right" id="cr-settled-heading">Paid / adjusted (PKR)</th><th class="text-right">Balance (PKR)</th></tr></thead>
+                        <tbody id="cr-tbody"></tbody>
+                    </table></div>
+                    <p class="cr-empty" id="cr-empty">Choose a farmer or buyer to view their receipts.</p>
+                    <div class="cr-pagination"><button class="btn btn-sm btn-ghost" type="button" id="cr-prev" onclick="CombinedReceipts.changePage(-1)" disabled><i data-lucide="chevron-left"></i> Previous</button><span id="cr-page"></span><button class="btn btn-sm btn-ghost" type="button" id="cr-next" onclick="CombinedReceipts.changePage(1)" disabled>Next <i data-lucide="chevron-right"></i></button></div>
+                </section>
+                <section class="cr-summary" aria-labelledby="cr-step-three">
+                    <div class="cr-summary-heading"><div class="cr-step-heading"><span class="cr-step-number">3</span><div><h4 id="cr-step-three">Combined totals</h4><p>These totals will appear at the end of your PDF.</p></div></div></div>
+                    <div class="cr-summary-grid">
+                        <div class="cr-metric"><span class="cr-metric-label">Receipts selected</span><strong id="cr-total-count">0</strong></div>
+                        <div class="cr-metric"><span class="cr-metric-label">Total net weight</span><strong><span id="cr-total-weight">0.00</span> KG</strong></div>
+                        <div class="cr-metric"><span class="cr-metric-label" id="cr-total-amount-label">Total amount</span><strong><span>PKR</span> <span id="cr-total-amount">0.00</span></strong></div>
+                        <div class="cr-metric"><span class="cr-metric-label" id="cr-total-settled-label">Paid / adjusted</span><strong><span>PKR</span> <span id="cr-total-settled">0.00</span></strong></div>
+                        <div class="cr-metric cr-metric-balance"><span class="cr-metric-label">Remaining balance</span><strong><span>PKR</span> <span id="cr-total-balance">0.00</span></strong></div>
+                    </div>
+                </section>
             </fieldset>
         </div>
         <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('combined-receipts-modal')">Close</button><button class="btn btn-primary" id="cr-export" onclick="CombinedReceipts.download()" disabled><i data-lucide="download"></i> Download combined PDF</button></div>

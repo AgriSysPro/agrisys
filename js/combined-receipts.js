@@ -39,9 +39,11 @@ const CombinedReceipts = {
         document.getElementById('cr-title').textContent = config.title;
         document.getElementById('cr-party-label').textContent = config.partyLabel;
         document.getElementById('cr-settled-heading').textContent = config.settledLabel + ' (PKR)';
+        document.getElementById('cr-total-settled-label').textContent = config.settledLabel;
+        document.getElementById('cr-total-amount-label').textContent = type === 'purchase' ? 'Total net payable' : 'Total sale amount';
         document.getElementById('cr-party').replaceChildren(new Option('Loading...', ''));
         for (const id of ['cr-from', 'cr-to', 'cr-search']) document.getElementById(id).value = '';
-        document.getElementById('cr-scope').textContent = 'Loading saved receipts...';
+        document.getElementById('cr-scope').querySelector('span').textContent = 'Loading saved receipts...';
         this.render();
         Utils.showModal('combined-receipts-modal');
         try {
@@ -61,7 +63,7 @@ const CombinedReceipts = {
                 document.getElementById('cr-from').value = season.startDate;
                 document.getElementById('cr-to').value = season.endDate;
             }
-            document.getElementById('cr-scope').textContent = season
+            document.getElementById('cr-scope').querySelector('span').textContent = season
                 ? `Dates start with ${season.label || 'the active season'}. Use All dates to include earlier receipts.`
                 : 'Choose a party and select at least two receipts. Dates filter the receipt dates.';
             this.render();
@@ -69,7 +71,7 @@ const CombinedReceipts = {
         } catch (error) {
             if (version !== this.version) return;
             document.getElementById('cr-party').replaceChildren(new Option('Unable to load receipts', ''));
-            document.getElementById('cr-scope').textContent = 'Close and reopen this window to try again.';
+            document.getElementById('cr-scope').querySelector('span').textContent = 'Close and reopen this window to try again.';
             Utils.showToast('Could not load receipts: ' + error.message, 'error');
         }
     },
@@ -177,20 +179,21 @@ const CombinedReceipts = {
         document.getElementById('cr-select-all').disabled = !records.length || invalid;
         document.getElementById('cr-clear').disabled = !this.selected.size;
         document.getElementById('cr-selected').textContent = `${this.selected.size} selected`;
-        const foot = document.getElementById('cr-totals');
-        foot.replaceChildren();
         document.getElementById('cr-export').disabled = this.busy || this.selected.size < 2;
+        document.getElementById('cr-total-count').textContent = String(this.selected.size);
+        for (const [id, key, places] of [
+            ['cr-total-weight', 'weight', 2], ['cr-total-amount', 'amount', 2],
+            ['cr-total-settled', 'settled', 2], ['cr-total-balance', 'balance', 2]
+        ]) document.getElementById(id).textContent = Utils.formatNum(0, places);
         if (this.selected.size) {
             const selected = this.records.filter(record => this.selected.has(this.recordKey(record)));
             try {
                 const rows = selected.map(record => this.rowFor(this.type, record, this.payments));
                 const totals = key => rows.reduce((sum, row) => sum + Math.round(row[key] * 100), 0) / 100;
-                const tr = document.createElement('tr');
-                const label = document.createElement('th'); label.colSpan = 4; label.textContent = 'SELECTED TOTALS'; tr.appendChild(label);
-                [Utils.formatNum(totals('weight'), 2), '—', Utils.formatPKR(totals('amount')), Utils.formatPKR(totals('settled')), Utils.formatPKR(totals('balance'))].forEach(value => {
-                    const td = document.createElement('th'); td.className = 'text-right'; td.textContent = value; tr.appendChild(td);
-                });
-                foot.appendChild(tr);
+                document.getElementById('cr-total-weight').textContent = Utils.formatNum(totals('weight'), 2);
+                document.getElementById('cr-total-amount').textContent = Utils.formatPKR(totals('amount'));
+                document.getElementById('cr-total-settled').textContent = Utils.formatPKR(totals('settled'));
+                document.getElementById('cr-total-balance').textContent = Utils.formatPKR(totals('balance'));
             } catch (error) {
                 document.getElementById('cr-selected').textContent = error.message;
                 document.getElementById('cr-export').disabled = true;
