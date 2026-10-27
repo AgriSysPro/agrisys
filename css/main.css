@@ -2020,3 +2020,26 @@ kbd {
     .rg-export-actions, .rg-export-actions .form-select, .rg-export-actions .btn { width: 100%; }
     .rg-export-actions .form-select { min-width: 0; }
 }
+
+/* ===== Combined Receipts ===== */
+.cr-modal { width: min(1200px, 96vw); }
+.cr-modal fieldset { border: 0; min-width: 0; }
+.cr-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.cr-filters .form-group { flex: 1 1 145px; margin: 0; min-width: 0; }
+.cr-filters .cr-party-field { flex: 2 1 230px; }
+.cr-filters .cr-search-field { flex: 1 1 190px; }
+.cr-help { color: var(--text-muted); font-size: 0.85rem; margin: 8px 0; }
+.cr-toolbar, .cr-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.cr-pagination { justify-content: center; }
+.cr-table-scroll { max-height: 40vh; overflow: auto; }
+.cr-table-scroll table { min-width: 900px; }
+.cr-table-scroll input { width: 18px; height: 18px; accent-color: var(--accent-primary); }
+.cr-table-scroll tfoot { background: var(--bg-hover); }
+.cr-table-scroll tfoot th { padding: 12px; }
+.cr-empty { text-align: center; color: var(--text-muted); padding: 20px; }
+.cr-empty[hidden] { display: none; }
+@media (max-width: 600px) {
+    .cr-modal .modal-body { padding: 16px; }
+    .cr-modal .modal-footer { flex-wrap: wrap; }
+    .cr-modal .modal-footer .btn-primary { width: 100%; }
+}

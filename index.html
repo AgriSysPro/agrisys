@@ -280,6 +280,7 @@
             <div class="page-header">
                 <div><h1 class="page-title">Purchase Records</h1><p class="page-title-sub">All purchase receipts</p></div>
                 <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="CombinedReceipts.open('purchase')"><i data-lucide="files"></i> Combine receipts</button>
                     <button class="btn btn-ghost" onclick="PurchaseExport.toExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
                     <button class="btn btn-primary" onclick="App.navigate('purchasing')"><i data-lucide="plus"></i> New Purchase</button>
                 </div>
@@ -410,6 +411,7 @@
             <div class="page-header">
                 <div><h1 class="page-title">Sale Records</h1><p class="page-title-sub">All sale receipts</p></div>
                 <div class="page-actions">
+                    <button class="btn btn-ghost" onclick="CombinedReceipts.open('sale')"><i data-lucide="files"></i> Combine receipts</button>
                     <button class="btn btn-ghost" onclick="SaleExport.toExcel()"><i data-lucide="file-spreadsheet"></i> Excel</button>
                     <button class="btn btn-primary" onclick="App.navigate('selling')"><i data-lucide="plus"></i> New Sale</button>
                 </div>
@@ -1638,6 +1640,38 @@
     </div>
 </div>
 
+<div class="modal-overlay" id="combined-receipts-modal" role="dialog" aria-modal="true" aria-labelledby="cr-title">
+    <div class="modal modal-xl cr-modal">
+        <div class="modal-header"><h3 class="modal-title" id="cr-title">Combine receipts</h3><button class="modal-close" aria-label="Close combined receipts" onclick="Utils.hideModal('combined-receipts-modal')">×</button></div>
+        <div class="modal-body">
+            <p class="cr-help">Select receipts for one party to create a combined PDF with individual amounts and a grand total. Original transactions remain unchanged.</p>
+            <fieldset id="cr-fields">
+                <div class="cr-filters">
+                    <div class="form-group cr-party-field"><label class="form-label" for="cr-party" id="cr-party-label">Farmer</label><select class="form-select" id="cr-party" onchange="CombinedReceipts.filtersChanged()"><option value="">Choose a farmer</option></select></div>
+                    <div class="form-group"><label class="form-label" for="cr-from">Receipt date from</label><input class="form-input" id="cr-from" type="date" onchange="CombinedReceipts.filtersChanged()"></div>
+                    <div class="form-group"><label class="form-label" for="cr-to">Receipt date to</label><input class="form-input" id="cr-to" type="date" onchange="CombinedReceipts.filtersChanged()"></div>
+                    <button class="btn btn-ghost" type="button" onclick="CombinedReceipts.allDates()">All dates</button>
+                    <div class="form-group cr-search-field"><label class="form-label" for="cr-search">Find receipt or crop</label><input class="form-input" id="cr-search" type="search" placeholder="Receipt number or crop" oninput="CombinedReceipts.filtersChanged()"></div>
+                </div>
+                <p class="cr-help" id="cr-scope"></p>
+                <div class="cr-toolbar">
+                    <button class="btn btn-sm btn-ghost" type="button" id="cr-select-all" onclick="CombinedReceipts.selectAll()">Select all matching</button>
+                    <button class="btn btn-sm btn-ghost" type="button" id="cr-clear" onclick="CombinedReceipts.clearSelection()" disabled>Clear selection</button>
+                    <span id="cr-selected" role="status" aria-live="polite">0 selected</span>
+                </div>
+                <p class="cr-help">Changing the party, dates or search clears the selection. Paid/received figures include all recorded settlements and advance adjustments.</p>
+                <div class="table-container cr-table-scroll"><table class="data-table">
+                    <thead><tr><th>Select</th><th>Receipt no.</th><th>Date</th><th>Crop</th><th class="text-right">Net KG</th><th class="text-right">Rate / maund</th><th class="text-right">Amount (PKR)</th><th class="text-right" id="cr-settled-heading">Paid / adjusted (PKR)</th><th class="text-right">Balance (PKR)</th></tr></thead>
+                    <tbody id="cr-tbody"></tbody><tfoot id="cr-totals"></tfoot>
+                </table></div>
+                <p class="cr-empty" id="cr-empty">Choose a farmer or buyer to view their receipts.</p>
+                <div class="cr-pagination"><button class="btn btn-sm btn-ghost" type="button" id="cr-prev" onclick="CombinedReceipts.changePage(-1)" disabled>Previous</button><span id="cr-page"></span><button class="btn btn-sm btn-ghost" type="button" id="cr-next" onclick="CombinedReceipts.changePage(1)" disabled>Next</button></div>
+            </fieldset>
+        </div>
+        <div class="modal-footer"><button class="btn btn-ghost" onclick="Utils.hideModal('combined-receipts-modal')">Close</button><button class="btn btn-primary" id="cr-export" onclick="CombinedReceipts.download()" disabled><i data-lucide="download"></i> Download combined PDF</button></div>
+    </div>
+</div>
+
 <!-- Scripts -->
 <script src="js/utils.js"></script>
 <script src="js/db.js"></script>
@@ -1664,6 +1698,7 @@
 <script src="js/backup-manager.js"></script>
 <script src="js/CoreServices.js"></script>
 <script src="js/receipt-gallery.js"></script>
+<script src="js/combined-receipts.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

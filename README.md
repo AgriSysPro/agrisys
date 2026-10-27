@@ -9,6 +9,7 @@ AgriSys is a premium, offline-first management application designed for agricult
   - **Purchasing:** Log purchases from farmers with automated deductions (Bardana, Labour, etc.).
   - **Selling:** Track sales to buyers with receipt image uploads.
 - **Financial Ledgers:** Automated bookkeeping for Farmers and Buyers. Track outstanding balances and advances in real-time.
+- **Combined Receipts:** In Purchase Records or Sale Records, choose Combine receipts, select one farmer or buyer and at least two receipts, then download an itemized PDF with grand totals for weight, amount, paid/received adjustments, and balance. Original transactions are preserved.
 - **Receipt Gallery:** Browse uploaded purchase kanda/scale slips and sale receipt images across all seasons. Search by receipt number, party, crop, type, or date; preview images; select multiple receipts; and download one PDF with computerized receipts beside the uploads, or images only.
 - **Professional PDF Receipts:** Generate and print high-quality PDF receipts for every transaction using a custom vector engine.
 - **Offline Reliability:** Powered by IndexedDB for local data persistence. Your data stays on your machine.
